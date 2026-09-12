@@ -4,20 +4,55 @@
 
 The Internal Operations Service Hub is a company-internal system for submitting and tracking help requests to departments such as IT, HR, and Finance.
 
-The project aims to replace scattered request channels with one system where employees can submit requests and follow their status, while authorized department staff can view and handle requests sent to their department.
+The project aims to replace scattered request channels with one system where employees can submit requests and follow their status, while authorized staff can view and handle those requests.
 
 ## Current Stage
 
-This repository contains the product requirements, initial system design, and a bounded Week 2 NestJS backend slice for Service Request status transitions.
+Week 3 delivers one vertical slice: a React view, a NestJS API, and PostgreSQL persistence through Prisma.
 
-This is not the full application. There is no frontend, no real database, and no authentication system. Data is stored in memory and is lost when the process stops.
+This is not the full application. There is no real authentication. `X-Actor-Id` is a temporary demo stand-in. Approvals, employee CRUD, and department CRUD are out of scope.
+
+Stack:
+
+```
+React/Vite UI (localhost:5173)
+  → NestJS API (localhost:3000)
+    → Prisma
+      → PostgreSQL
+```
+
+Temporary actor identity: header `X-Actor-Id`. The UI has `Acting as: Chadi | John`.
+
+Lifecycle for this slice: `SUBMITTED → IN_PROGRESS → COMPLETED`. `COMPLETED` is terminal. A current owner is required before a transition.
+
+Seeded actors: Chadi (`id=1`, IT, `canHandle=true`), John (`id=2`, IT, `canHandle=false`). Department `1` is IT.
 
 ## Install
 
-Requires Node.js 18 or later.
+Requires Node.js 18 or later, a local PostgreSQL server, and (for the browser test) Google Chrome.
 
 ```powershell
 npm install
+cd frontend
+npm install
+cd ..
+```
+
+## Development database
+
+Create a database named `operations_hub`. Copy `.env.example` to `.env` and set `DATABASE_URL`:
+
+```env
+DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@localhost:5432/operations_hub"
+```
+
+If the password contains `#`, `@`, or `%`, URL-encode those characters (`#` → `%23`).
+
+Apply migrations and seed once. Nest does not seed on start.
+
+```powershell
+npx prisma migrate deploy
+npx prisma db seed
 ```
 
 ## Start the API
@@ -28,157 +63,94 @@ npm start
 
 The API listens on `http://localhost:3000`.
 
-Restart the process before a clean verification run. In-memory IDs start at 1 after each restart.
+## Start the UI
 
-## Week 2 Lifecycle Assumptions
+In a second terminal:
 
-Week 1 did not define exact request statuses or allowed transitions.
+```powershell
+cd frontend
+npm run dev
+```
 
-For this bounded Week 2 implementation, the following assumptions are used:
+The UI listens on `http://localhost:5173`.
 
-- Requests start as `SUBMITTED`.
-- The implemented lifecycle is `SUBMITTED -> IN_PROGRESS -> COMPLETED`.
-- `COMPLETED` is terminal for this slice.
-- A current owner must exist before a status transition can occur.
-- These assumptions apply only to the Week 2 slice and do not define the complete product lifecycle.
+## Exercise the flow
+
+1. Open `http://localhost:5173`.
+2. Select **John**.
+3. Create a request to **IT**. Note the request ID. Status is **SUBMITTED**.
+4. Select **Chadi**. The loaded request clears.
+5. Enter the ID under **Request ID** and click **Load Request**.
+6. Assign **Chadi** as owner.
+7. Click **Start Request**. Status becomes **IN PROGRESS**. History shows `SUBMITTED → IN PROGRESS` by Chadi.
+8. Optionally click **Complete Request**.
+
+The UI only exposes the next legal transition. Invalid skips such as `SUBMITTED → COMPLETED` are rejected by the API with **409**.
+
+John can view his own request. John cannot view Chadi's request (**403**). Chadi can view John's request.
 
 ## Endpoints
 
+Request routes require `X-Actor-Id`. `GET /employees` and `GET /departments` do not.
+
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/requests` | Create a request. Always starts as `SUBMITTED`. Body: `{ "submittedBy": 1, "departmentId": 2 }` |
-| GET | `/requests/:id` | Inspect the current request |
-| PATCH | `/requests/:id/owner` | Assign `currentOwnerId`. Body: `{ "currentOwnerId": 7 }` |
-| PATCH | `/requests/:id/transition` | Attempt a lifecycle transition. Body: `{ "to": "IN_PROGRESS", "changedBy": 7 }` |
-| GET | `/requests/:id/history` | Inspect successful status history |
+| POST | `/requests` | Create. Always `SUBMITTED`. Body: `{ "submittedBy": 2, "departmentId": 1 }`. `submittedBy` must match `X-Actor-Id`. |
+| GET | `/requests/:id` | Fetch a request the actor may view. |
+| PATCH | `/requests/:id/owner` | Assign owner. Body: `{ "currentOwnerId": 1 }`. Handler only. Owner must have `canHandle` and must not be the submitter. |
+| PATCH | `/requests/:id/transition` | Body: `{ "to": "IN_PROGRESS", "changedBy": 1 }`. `changedBy` must match `X-Actor-Id` and the current owner. |
+| GET | `/requests/:id/history` | Successful status history the actor may view. |
+| GET | `/employees` | Seeded employees for the UI. |
+| GET | `/departments` | Seeded departments for the UI. |
 
-Allowed transitions for this Week 2 slice: `SUBMITTED -> IN_PROGRESS -> COMPLETED`.
+Visibility: `canView = actor.canHandle || request.submittedBy === actor.id`. Handler actions require `canHandle`. Unauthorized → **403**. Illegal lifecycle edge by an authorized handler → **409**, no history write. Missing request → **404**.
 
-The client cannot choose the initial status. Status changes can only occur through the transition endpoint, and the service enforces the allowed lifecycle transitions.
+Responses include nested `submitter`, `department`, and `currentOwner` names.
 
-`changedBy` represents the employee performing the update for this bounded implementation. It is **not** authentication. The service checks `changedBy === currentOwnerId` to enforce the Week 1 rule that the current owner updates the Request status.
+## Tests
 
-## Reproduce the proof cases
+Automated tests use a **separate** database, `operations_hub_test`. They will not run against `operations_hub`.
 
-Run these PowerShell commands while the API is running. They capture request IDs so they stay valid after a restart.
+Create `operations_hub_test` once in PostgreSQL. Copy `.env.test.example` to `.env.test`:
 
-```powershell
-$base = "http://localhost:3000"
-
-function Invoke-Api {
-  param([string]$Method, [string]$Url, $Body)
-  $params = @{ Method = $Method; Uri = $Url; ContentType = "application/json" }
-  if ($null -ne $Body) { $params.Body = ($Body | ConvertTo-Json -Compress) }
-  try {
-    $resp = Invoke-WebRequest @params -UseBasicParsing
-    [pscustomobject]@{ StatusCode = [int]$resp.StatusCode; Body = ($resp.Content | ConvertFrom-Json) }
-  } catch {
-    $status = 0
-    $parsed = $null
-    if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
-    if ($_.ErrorDetails.Message) {
-      try { $parsed = $_.ErrorDetails.Message | ConvertFrom-Json } catch { $parsed = $_.ErrorDetails.Message }
-    } else { $parsed = $_.Exception.Message }
-    [pscustomobject]@{ StatusCode = $status; Body = $parsed }
-  }
-}
+```env
+DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@localhost:5432/operations_hub_test"
 ```
 
-### VALID CASE 1 — SUBMITTED to IN_PROGRESS
+Prepare schema and seed on the test database only:
 
 ```powershell
-$create1 = Invoke-Api POST "$base/requests" @{ submittedBy = 1; departmentId = 2 }
-$id1 = $create1.Body.id
-Invoke-Api PATCH "$base/requests/$id1/owner" @{ currentOwnerId = 7 }
-Invoke-Api PATCH "$base/requests/$id1/transition" @{ to = "IN_PROGRESS"; changedBy = 7 }
-Invoke-Api GET "$base/requests/$id1"
-Invoke-Api GET "$base/requests/$id1/history"
+npm run test:db:setup
 ```
 
-Expected: create `201` with `status = SUBMITTED` and `currentOwnerId = null`; owner assign `200`; transition `200` with `status = IN_PROGRESS`; history has one record `SUBMITTED -> IN_PROGRESS`, `changedBy = 7`.
-
-Actual (this run): matched. Request `1` became `IN_PROGRESS`. History: one record, `previousStatus = SUBMITTED`, `newStatus = IN_PROGRESS`, `changedBy = 7`.
-
-### VALID CASE 2 — IN_PROGRESS to COMPLETED
+Backend (Jest, 3 suites / 6 tests):
 
 ```powershell
-Invoke-Api PATCH "$base/requests/$id1/transition" @{ to = "COMPLETED"; changedBy = 7 }
-Invoke-Api GET "$base/requests/$id1"
-Invoke-Api GET "$base/requests/$id1/history"
+npm test
 ```
 
-Expected: `200`; `status = COMPLETED`; second history record `IN_PROGRESS -> COMPLETED`, `changedBy = 7`.
-
-Actual (this run): matched. Request `1` became `COMPLETED`. History had two records.
-
-### INVALID CASE 1 — SUBMITTED to COMPLETED
+Browser E2E (Playwright, 1 test). Google Chrome must be installed. Playwright uses `channel: 'chrome'`, not bundled Chromium. Stop anything already listening on ports 3000 or 5173.
 
 ```powershell
-$create2 = Invoke-Api POST "$base/requests" @{ submittedBy = 1; departmentId = 2 }
-$id2 = $create2.Body.id
-Invoke-Api PATCH "$base/requests/$id2/owner" @{ currentOwnerId = 7 }
-Invoke-Api PATCH "$base/requests/$id2/transition" @{ to = "COMPLETED"; changedBy = 7 }
-Invoke-Api GET "$base/requests/$id2"
-Invoke-Api GET "$base/requests/$id2/history"
+npm run test:e2e
 ```
 
-Expected: `409`; status remains `SUBMITTED`; history stays empty.
-
-Actual (this run): matched. HTTP `409` `"Transition from SUBMITTED to COMPLETED is not allowed"`. Request `2` stayed `SUBMITTED`. History `[]`.
-
-### INVALID CASE 2 — COMPLETED to IN_PROGRESS
-
-```powershell
-Invoke-Api PATCH "$base/requests/$id1/transition" @{ to = "IN_PROGRESS"; changedBy = 7 }
-Invoke-Api GET "$base/requests/$id1"
-Invoke-Api GET "$base/requests/$id1/history"
-```
-
-Expected: `409`; status remains `COMPLETED`; history still has only the two successful records.
-
-Actual (this run): matched. HTTP `409` `"Transition from COMPLETED to IN_PROGRESS is not allowed"`. Request `1` stayed `COMPLETED`. History unchanged (2 records).
-
-### WEEK 1 OWNER RULE — changedBy is not the current owner
-
-```powershell
-$create3 = Invoke-Api POST "$base/requests" @{ submittedBy = 1; departmentId = 2 }
-$id3 = $create3.Body.id
-Invoke-Api PATCH "$base/requests/$id3/owner" @{ currentOwnerId = 7 }
-Invoke-Api PATCH "$base/requests/$id3/transition" @{ to = "IN_PROGRESS"; changedBy = 12 }
-Invoke-Api GET "$base/requests/$id3"
-Invoke-Api GET "$base/requests/$id3/history"
-```
-
-Expected: `409`; status remains `SUBMITTED`; no history record.
-
-Actual (this run): matched. HTTP `409` `"Only the current owner can update the request status"`. Request `3` stayed `SUBMITTED` with `currentOwnerId = 7`. History `[]`.
-
-### NO OWNER CASE — transition with currentOwnerId null
-
-```powershell
-$create4 = Invoke-Api POST "$base/requests" @{ submittedBy = 1; departmentId = 2 }
-$id4 = $create4.Body.id
-Invoke-Api PATCH "$base/requests/$id4/transition" @{ to = "IN_PROGRESS"; changedBy = 7 }
-Invoke-Api GET "$base/requests/$id4"
-Invoke-Api GET "$base/requests/$id4/history"
-```
-
-Expected: `409`; status remains `SUBMITTED`; no history record.
-
-Actual (this run): matched. HTTP `409` `"A current owner must be assigned before a status transition"`. Request `4` stayed `SUBMITTED` with `currentOwnerId = null`. History `[]`.
+`npm test` and `npm run test:e2e` refuse to start unless `.env.test` points at the exact database name `operations_hub_test`.
 
 ## Documentation
 
-The project documentation is located in the `docs` folder:
+- `docs/product-spec.md` — Week 1 problem, requirements, unknowns
+- `docs/architecture.md` — actors, components, flow, authorization decision
+- `docs/data-model.md` — entities and relationships
+- `docs/decisions/ADR-001.md` — synchronous request submission
+- `docs/week2-agentic-workflow.md` — Week 2 in-memory lifecycle notes
+- `docs/week3-agentic-workflow.md` — Week 3 implementation notes
+- `docs/week3-full-stack-delivery.md` — Week 3 delivered slice, API, tests, and evidence
 
-- `product-spec.md` describes the problem, requirements, assumptions, constraints, unknowns, and acceptance criteria.
-- `architecture.md` describes the actors, responsibilities, components, system boundaries, main flow, and architectural decisions.
-- `data-model.md` describes the entities, relationships, lifecycle rules, storage choice, and access patterns.
-- `decisions/ADR-001.md` records the decision to use synchronous communication for request submission and explains why it was chosen.
-- `week2-agentic-workflow.md` records the Week 2 UNDERSTAND / DIRECT / PROVE notes for the bounded request lifecycle slice.
+## Week 1 / Week 2 context
 
-## Week 1 Open Unknowns
+Week 1 left exact statuses, ownership, and authentication unknown. Week 2 implemented the same lifecycle in memory, without a frontend or database.
 
-At the full-product level, some details remain undefined, including authentication, required request fields, confidentiality rules, approval rules, ownership assignment, request statuses, and supported departments.
+Those in-memory IDs and PowerShell cases are **not** the current system. Current evidence is the UI flow above plus `npm test` and `npm run test:e2e`.
 
-For the bounded Week 2 implementation only, the lifecycle states `SUBMITTED`, `IN_PROGRESS`, and `COMPLETED` are explicit implementation assumptions and do not resolve the full-product status model.
+At the full-product level, authentication, approvals, confidentiality, and extra request fields remain undefined. This slice does not resolve them.

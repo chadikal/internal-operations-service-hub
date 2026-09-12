@@ -1,0 +1,56 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RequestStatus {
+  SUBMITTED
+  IN_PROGRESS
+  COMPLETED
+}
+
+model Department {
+  id        Int        @id @default(autoincrement())
+  name      String
+  employees Employee[]
+  requests  Request[]
+}
+
+model Employee {
+  id                Int                    @id @default(autoincrement())
+  name              String
+  departmentId      Int
+  canHandle         Boolean                @default(false)
+  department        Department             @relation(fields: [departmentId], references: [id])
+  submittedRequests Request[]              @relation("RequestSubmitter")
+  ownedRequests     Request[]              @relation("RequestOwner")
+  statusChanges     RequestStatusHistory[]
+}
+
+model Request {
+  id              Int                    @id @default(autoincrement())
+  submittedBy     Int
+  departmentId    Int
+  currentOwnerId  Int?
+  status          RequestStatus          @default(SUBMITTED)
+  statusUpdatedAt DateTime
+  submitter       Employee               @relation("RequestSubmitter", fields: [submittedBy], references: [id])
+  department      Department             @relation(fields: [departmentId], references: [id])
+  currentOwner    Employee?              @relation("RequestOwner", fields: [currentOwnerId], references: [id])
+  history         RequestStatusHistory[]
+}
+
+model RequestStatusHistory {
+  id                Int           @id @default(autoincrement())
+  requestId         Int
+  previousStatus    RequestStatus
+  newStatus         RequestStatus
+  changedBy         Int
+  changedAt         DateTime
+  request           Request       @relation(fields: [requestId], references: [id])
+  changedByEmployee Employee      @relation(fields: [changedBy], references: [id])
+}
