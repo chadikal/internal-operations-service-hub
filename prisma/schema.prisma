@@ -38,6 +38,8 @@ model Request {
   currentOwnerId  Int?
   status          RequestStatus          @default(SUBMITTED)
   statusUpdatedAt DateTime
+  title           String?
+  description     String?
   submitter       Employee               @relation("RequestSubmitter", fields: [submittedBy], references: [id])
   department      Department             @relation(fields: [departmentId], references: [id])
   currentOwner    Employee?              @relation("RequestOwner", fields: [currentOwnerId], references: [id])

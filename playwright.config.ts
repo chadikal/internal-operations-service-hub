@@ -29,6 +29,8 @@ export default defineConfig({
       timeout: 120_000,
       env: {
         DATABASE_URL: databaseUrl,
+        AI_PROVIDER: 'mock',
+        REQUESTY_API_KEY: '',
       },
     },
     {

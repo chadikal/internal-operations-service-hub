@@ -68,4 +68,39 @@ describe('Request persistence', () => {
     expect(history[0].newStatus).toBe('IN_PROGRESS');
     expect(history[0].changedBy).toBe(CHADI);
   });
+
+  it('stores optional title and description and keeps omitted fields null', async () => {
+    const withText = await request(app.getHttpServer())
+      .post('/requests')
+      .set(asActor(JOHN))
+      .send({
+        submittedBy: JOHN,
+        departmentId: IT,
+        title: 'Laptop request',
+        description: 'I need a laptop for development work.',
+      });
+    expect(withText.status).toBe(201);
+    expect(withText.body.title).toBe('Laptop request');
+    expect(withText.body.description).toBe('I need a laptop for development work.');
+
+    const persistedWithText = await prisma.request.findUnique({
+      where: { id: withText.body.id as number },
+    });
+    expect(persistedWithText?.title).toBe('Laptop request');
+    expect(persistedWithText?.description).toBe('I need a laptop for development work.');
+
+    const omitted = await request(app.getHttpServer())
+      .post('/requests')
+      .set(asActor(JOHN))
+      .send({ submittedBy: JOHN, departmentId: IT });
+    expect(omitted.status).toBe(201);
+    expect(omitted.body.title).toBeNull();
+    expect(omitted.body.description).toBeNull();
+
+    const persistedOmitted = await prisma.request.findUnique({
+      where: { id: omitted.body.id as number },
+    });
+    expect(persistedOmitted?.title).toBeNull();
+    expect(persistedOmitted?.description).toBeNull();
+  });
 });

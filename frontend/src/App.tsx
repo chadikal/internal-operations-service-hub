@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react';
 import {
+  analyzeIntake,
   assignOwner,
   createRequest,
   Department,
@@ -8,10 +9,14 @@ import {
   getEmployees,
   getHistory,
   getRequest,
+  hasActionableIntakeDraft,
   HistoryRecord,
+  IntakeResult,
   ServiceRequest,
   transition,
 } from './api';
+
+type IntakeStep = 'input' | 'troubleshoot' | 'offer' | 'draft' | 'resolved' | 'declined';
 
 function statusClass(status: ServiceRequest['status']) {
   if (status === 'SUBMITTED') return 'badge badge-submitted';
@@ -30,12 +35,17 @@ export default function App() {
   const [departments, setDepartments] = useState<Department[]>([]);
   const [actorId, setActorId] = useState<number | null>(null);
   const [departmentId, setDepartmentId] = useState('');
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
   const [ownerId, setOwnerId] = useState('');
   const [loadId, setLoadId] = useState('');
   const [request, setRequest] = useState<ServiceRequest | null>(null);
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [intakeText, setIntakeText] = useState('');
+  const [intakeResult, setIntakeResult] = useState<IntakeResult | null>(null);
+  const [intakeStep, setIntakeStep] = useState<IntakeStep>('input');
 
   const actor = employees.find((employee) => Number(employee.id) === Number(actorId)) ?? null;
   const canHandle = actor?.canHandle === true;
@@ -51,6 +61,7 @@ export default function App() {
     : eligibleOwners[0]
       ? String(eligibleOwners[0].id)
       : '';
+  const canSubmitRequest = actorId !== null && departmentId !== '';
 
   useEffect(() => {
     Promise.all([getEmployees(), getDepartments()])
@@ -86,6 +97,22 @@ export default function App() {
     }
   }
 
+  function resetIntake() {
+    setIntakeText('');
+    setIntakeResult(null);
+    setIntakeStep('input');
+  }
+
+  function applyDraft(result: IntakeResult) {
+    if (result.draft?.departmentId != null) {
+      setDepartmentId(String(result.draft.departmentId));
+    } else {
+      setDepartmentId('');
+    }
+    setTitle(result.draft?.summary ?? '');
+    setDescription(result.draft?.description ?? '');
+  }
+
   function onSelectActor(nextActorId: number) {
     const nextActor = employees.find((employee) => Number(employee.id) === Number(nextActorId));
     setActorId(nextActorId);
@@ -95,15 +122,24 @@ export default function App() {
     setRequest(null);
     setHistory([]);
     setError('');
+    resetIntake();
+  }
+
+  async function submitCreate() {
+    if (actorId === null || departmentId === '') return;
+    const created = await createRequest(actorId, actorId, Number(departmentId), title, description);
+    setTitle('');
+    setDescription('');
+    if (departments[0]) {
+      setDepartmentId(String(departments[0].id));
+    }
+    resetIntake();
+    await refresh(created.id, actorId);
   }
 
   function onCreate(event: FormEvent) {
     event.preventDefault();
-    if (actorId === null) return;
-    void run(async () => {
-      const created = await createRequest(actorId, actorId, Number(departmentId));
-      await refresh(created.id, actorId);
-    });
+    void run(submitCreate);
   }
 
   function onLoad(event: FormEvent) {
@@ -144,6 +180,46 @@ export default function App() {
     });
   }
 
+  function onAnalyze(event: FormEvent) {
+    event.preventDefault();
+    if (actorId === null) return;
+    setIntakeResult(null);
+    setIntakeStep('input');
+    void run(async () => {
+      const result = await analyzeIntake(actorId, intakeText);
+      setIntakeResult(result);
+      if (result.situation === 'problem' && result.troubleshootingSteps.length > 0) {
+        setIntakeStep('troubleshoot');
+      } else if (hasActionableIntakeDraft(result.draft)) {
+        setIntakeStep('offer');
+      } else {
+        setIntakeStep('input');
+      }
+    });
+  }
+
+  function onProblemSolved(solved: boolean) {
+    if (solved) {
+      setIntakeStep('resolved');
+      return;
+    }
+    if (hasActionableIntakeDraft(intakeResult?.draft)) {
+      setIntakeStep('offer');
+      return;
+    }
+    setIntakeStep('input');
+  }
+
+  function onPrepareRequest(prepare: boolean) {
+    if (!intakeResult || !hasActionableIntakeDraft(intakeResult.draft)) return;
+    if (!prepare) {
+      setIntakeStep('declined');
+      return;
+    }
+    applyDraft(intakeResult);
+    setIntakeStep('draft');
+  }
+
   return (
     <div className="page">
       <header className="header">
@@ -173,6 +249,154 @@ export default function App() {
         </div>
       ) : null}
 
+      <section className="card">
+        <h2>Request Intake</h2>
+        <p className="muted">
+          Describe what you need. Suggestions are advisory only; nothing is submitted until you
+          click Create Request.
+        </p>
+
+        {intakeStep === 'input' || intakeStep === 'troubleshoot' || intakeStep === 'offer' ? (
+          <form className="stack" onSubmit={onAnalyze}>
+            <label>
+              What do you need?
+              <textarea
+                value={intakeText}
+                onChange={(event) => setIntakeText(event.target.value)}
+                rows={4}
+                disabled={busy}
+              />
+            </label>
+            <button className="btn-primary" type="submit" disabled={busy || actorId === null}>
+              Analyze
+            </button>
+          </form>
+        ) : null}
+
+        {intakeResult && intakeResult.missingInformation.length > 0 ? (
+          <div className="notice" data-testid="intake-missing-information">
+            <p>Some information is missing:</p>
+            <ul>
+              {intakeResult.missingInformation.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
+        {intakeStep === 'input' &&
+        intakeResult &&
+        !hasActionableIntakeDraft(intakeResult.draft) ? (
+          <p className="muted" data-testid="intake-need-more">
+            Please provide a little more detail so we can understand your request and help
+            you get it to the right department.
+          </p>
+        ) : null}
+
+        {intakeStep === 'troubleshoot' && intakeResult ? (
+          <div className="stack">
+            <p className="muted">Try these steps first. They are suggestions, not required actions.</p>
+            <ol className="steps" data-testid="troubleshooting-steps">
+              {intakeResult.troubleshootingSteps.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
+            </ol>
+            <p>Did this solve the problem?</p>
+            <div className="actions">
+              <button className="btn-primary" type="button" disabled={busy} onClick={() => onProblemSolved(true)}>
+                Yes, it's solved
+              </button>
+              <button className="btn-secondary" type="button" disabled={busy} onClick={() => onProblemSolved(false)}>
+                No, still unresolved
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {intakeStep === 'offer' ? (
+          <div className="stack">
+            {intakeResult?.situation === 'need' ? (
+              <p className="muted">
+                This looks like a straightforward request, so troubleshooting is not needed.
+              </p>
+            ) : (
+              <p className="muted">If the problem is still unresolved, you can prepare a request.</p>
+            )}
+            <p>Do you want to prepare a request?</p>
+            <div className="actions">
+              <button className="btn-primary" type="button" disabled={busy} onClick={() => onPrepareRequest(true)}>
+                Prepare a request
+              </button>
+              <button className="btn-secondary" type="button" disabled={busy} onClick={() => onPrepareRequest(false)}>
+                No thanks
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {intakeStep === 'resolved' ? (
+          <div className="stack">
+            <p className="muted">Glad those steps helped. No request was created.</p>
+            <button className="btn-secondary" type="button" onClick={resetIntake}>
+              Describe something else
+            </button>
+          </div>
+        ) : null}
+
+        {intakeStep === 'declined' ? (
+          <div className="stack">
+            <p className="muted">No request was created.</p>
+            <button className="btn-secondary" type="button" onClick={resetIntake}>
+              Describe something else
+            </button>
+          </div>
+        ) : null}
+
+        {intakeStep === 'draft' ? (
+          <form className="stack" onSubmit={onCreate}>
+            <p className="muted">
+              Review and edit this draft. Create Request uses the normal request submission flow.
+            </p>
+            <label>
+              Department
+              <select
+                value={departmentId}
+                onChange={(event) => setDepartmentId(event.target.value)}
+                required
+              >
+                <option value="">Select a department</option>
+                {departments.map((department) => (
+                  <option key={department.id} value={department.id}>
+                    {department.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Title
+              <input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={200} />
+            </label>
+            <label>
+              Description
+              <textarea
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                rows={4}
+                maxLength={2000}
+              />
+            </label>
+            <div className="actions">
+              <button className="btn-primary" type="submit" disabled={busy || !canSubmitRequest}>
+                Create Request
+              </button>
+              <button className="btn-secondary" type="button" onClick={resetIntake}>
+                Start over
+              </button>
+            </div>
+          </form>
+        ) : null}
+      </section>
+
       <div className="grid">
         <section className="card">
           <h2>Create Request</h2>
@@ -183,6 +407,7 @@ export default function App() {
             <label>
               Department
               <select value={departmentId} onChange={(event) => setDepartmentId(event.target.value)}>
+                <option value="">Select a department</option>
                 {departments.map((department) => (
                   <option key={department.id} value={department.id}>
                     {department.name}
@@ -190,7 +415,24 @@ export default function App() {
                 ))}
               </select>
             </label>
-            <button className="btn-primary" type="submit" disabled={busy || actorId === null}>
+            <label>
+              Title
+              <input
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                maxLength={200}
+              />
+            </label>
+            <label>
+              Description
+              <textarea
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                rows={3}
+                maxLength={2000}
+              />
+            </label>
+            <button className="btn-primary" type="submit" disabled={busy || !canSubmitRequest}>
               Create Request
             </button>
           </form>
@@ -244,6 +486,14 @@ export default function App() {
               <div>
                 <dt>Status</dt>
                 <dd>{request.status.replace('_', ' ')}</dd>
+              </div>
+              <div>
+                <dt>Title</dt>
+                <dd>{request.title ? request.title : '—'}</dd>
+              </div>
+              <div className="details-wide">
+                <dt>Description</dt>
+                <dd>{request.description ? request.description : '—'}</dd>
               </div>
             </dl>
 

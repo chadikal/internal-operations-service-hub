@@ -24,6 +24,8 @@ export type ServiceRequest = {
   currentOwnerId: number | null;
   status: 'SUBMITTED' | 'IN_PROGRESS' | 'COMPLETED';
   statusUpdatedAt: string;
+  title: string | null;
+  description: string | null;
   submitter: NamedRef;
   department: NamedRef;
   currentOwner: NamedRef | null;
@@ -38,6 +40,27 @@ export type HistoryRecord = {
   changedAt: string;
   changedByEmployee: NamedRef;
 };
+
+export type IntakeDraft = {
+  departmentId: number | null;
+  summary: string | null;
+  description: string | null;
+};
+
+export type IntakeResult = {
+  situation: 'problem' | 'need';
+  troubleshootingSteps: string[];
+  missingInformation: string[];
+  draft: IntakeDraft | null;
+};
+
+export function hasActionableIntakeDraft(draft: IntakeDraft | null | undefined): boolean {
+  return (
+    draft != null &&
+    draft.departmentId != null &&
+    Boolean(draft.summary?.trim())
+  );
+}
 
 function actorHeaders(actorId: number): HeadersInit {
   return {
@@ -76,11 +99,32 @@ export function getDepartments() {
   return send<Department[]>('/departments');
 }
 
-export function createRequest(actorId: number, submittedBy: number, departmentId: number) {
+export function createRequest(
+  actorId: number,
+  submittedBy: number,
+  departmentId: number,
+  title?: string,
+  description?: string,
+) {
+  const trimmedTitle = title?.trim();
+  const trimmedDescription = description?.trim();
   return send<ServiceRequest>('/requests', {
     method: 'POST',
     headers: actorHeaders(actorId),
-    body: JSON.stringify({ submittedBy, departmentId }),
+    body: JSON.stringify({
+      submittedBy,
+      departmentId,
+      ...(trimmedTitle ? { title: trimmedTitle } : {}),
+      ...(trimmedDescription ? { description: trimmedDescription } : {}),
+    }),
+  });
+}
+
+export function analyzeIntake(actorId: number, text: string) {
+  return send<IntakeResult>('/ai/intake', {
+    method: 'POST',
+    headers: actorHeaders(actorId),
+    body: JSON.stringify({ text }),
   });
 }
 

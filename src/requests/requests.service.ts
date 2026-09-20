@@ -44,6 +44,8 @@ export class RequestsService {
         currentOwnerId: null,
         status: PrismaRequestStatus.SUBMITTED,
         statusUpdatedAt: new Date(),
+        title: optionalText(dto.title),
+        description: optionalText(dto.description),
       },
       include: requestInclude,
     });
@@ -210,6 +212,8 @@ export class RequestsService {
     currentOwnerId: number | null;
     status: PrismaRequestStatus;
     statusUpdatedAt: Date;
+    title: string | null;
+    description: string | null;
     submitter: { id: number; name: string };
     department: { id: number; name: string };
     currentOwner: { id: number; name: string } | null;
@@ -221,6 +225,8 @@ export class RequestsService {
       currentOwnerId: request.currentOwnerId,
       status: request.status,
       statusUpdatedAt: request.statusUpdatedAt.toISOString(),
+      title: request.title,
+      description: request.description,
       submitter: {
         id: request.submitter.id,
         name: request.submitter.name,
@@ -237,4 +243,12 @@ export class RequestsService {
         : null,
     };
   }
+}
+
+function optionalText(value: string | undefined): string | null {
+  if (value === undefined) {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length === 0 ? null : trimmed;
 }

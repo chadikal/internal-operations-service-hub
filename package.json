@@ -10,7 +10,8 @@
     "prisma:seed": "prisma db seed",
     "test": "jest",
     "test:db:setup": "node scripts/setup-test-db.cjs",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "eval:ai": "jest --testRegex intake.eval.spec.ts"
   },
   "jest": {
     "moduleFileExtensions": [

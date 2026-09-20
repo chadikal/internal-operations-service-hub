@@ -61,6 +61,8 @@ function loadTestEnv() {
   }
 
   process.env.DATABASE_URL = databaseUrl;
+  process.env.AI_PROVIDER = 'mock';
+  delete process.env.REQUESTY_API_KEY;
   return databaseUrl;
 }
 

@@ -130,7 +130,8 @@ body {
 }
 
 select,
-input {
+input,
+textarea {
   width: 100%;
   margin: 0;
   padding: 10px 12px;
@@ -141,8 +142,14 @@ input {
   font: inherit;
 }
 
+textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+
 select:focus,
-input:focus {
+input:focus,
+textarea:focus {
   outline: 2px solid #9fb3c8;
   border-color: var(--primary);
 }
@@ -207,9 +214,34 @@ button:disabled {
   letter-spacing: 0.03em;
 }
 
-.details dd {
-  margin: 4px 0 0;
-  font-weight: 600;
+.details-wide {
+  grid-column: 1 / -1;
+}
+
+.notice {
+  background: #eef4f8;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 12px 0;
+}
+
+.notice p {
+  margin: 0 0 8px;
+}
+
+.notice ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.steps {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+
+.steps li {
+  margin-bottom: 6px;
 }
 
 .badge {
