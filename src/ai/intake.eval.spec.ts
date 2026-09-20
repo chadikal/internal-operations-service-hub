@@ -1,5 +1,6 @@
 import { INestApplication } from '@nestjs/common';
 import * as request from 'supertest';
+import { isActionableIntakeDraft } from './intake.schema';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   asActor,
@@ -66,7 +67,7 @@ describe('AI intake evals', () => {
     expect(await countAuthoritativeRows(prisma)).toEqual({ requests: 0, history: 0 });
   });
 
-  it('3 clear need: employment certificate routes to HR', async () => {
+  it('3 clear need: employment certificate keeps an HR draft plus useful missing details', async () => {
     const response = await request(app.getHttpServer())
       .post('/ai/intake')
       .set(asActor(JOHN))
@@ -76,6 +77,12 @@ describe('AI intake evals', () => {
     expect(response.body.situation).toBe('need');
     expect(response.body.troubleshootingSteps).toEqual([]);
     expect(response.body.draft.departmentId).toBe(HR);
+    expect(response.body.draft.summary).toBeTruthy();
+    expect(isActionableIntakeDraft(response.body.draft)).toBe(true);
+    expect(response.body.missingInformation.length).toBeGreaterThan(0);
+    expect(response.body.missingInformation.join(' ')).toMatch(
+      /purpose|recipient|deadline|format|language/i,
+    );
     expect(await countAuthoritativeRows(prisma)).toEqual({ requests: 0, history: 0 });
   });
 

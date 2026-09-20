@@ -8,9 +8,11 @@ The project aims to replace scattered request channels with one system where emp
 
 ## Current Stage
 
-Week 3 delivers one vertical slice: a React view, a NestJS API, and PostgreSQL persistence through Prisma.
+Week 4 / v0.4 is the current slice: the Week 3 React + NestJS + PostgreSQL app plus advisory Request Intake.
 
-This is not the full application. There is no real authentication. `X-Actor-Id` is a temporary demo stand-in. Approvals, employee CRUD, and department CRUD are out of scope. Week 4 adds advisory request intake; it does not create requests by itself.
+An employee can describe a need in free text. The API analyzes it with Requesty at runtime (`AI_PROVIDER=requesty`) and returns troubleshooting and/or a draft. Intake never creates a request; the employee reviews the draft and submits through the existing Create Request path. Automated tests and evals use `MockAiProvider`.
+
+This is not the full application. There is no real authentication. `X-Actor-Id` is a temporary demo stand-in. Approvals, employee CRUD, and department CRUD are out of scope.
 
 Stack:
 
@@ -79,6 +81,16 @@ npm run dev
 
 The UI listens on `http://localhost:5173`.
 
+## Request Intake
+
+1. Open `http://localhost:5173` and select an actor.
+2. In **Request Intake**, describe what you need and click **Analyze**. Nothing is submitted.
+3. A **problem** shows up to 3 troubleshooting steps first. A **need** skips that and offers to prepare a request.
+4. Optional missing details may appear even when a draft is ready; they do not block **Prepare a request**.
+5. After yes, edit department, title, and description, then click **Create Request** (existing `POST /requests`).
+
+Thin input such as “I need help.” stays on the form with no draft.
+
 ## Exercise the flow
 
 1. Open `http://localhost:5173`.
@@ -142,7 +154,13 @@ AI intake evals (8 cases; also included in `npm test`):
 npm run eval:ai
 ```
 
-Browser E2E (Playwright, 1 test). Google Chrome must be installed. Playwright uses `channel: 'chrome'`, not bundled Chromium. Stop anything already listening on ports 3000 or 5173.
+Backend production build (Nest → `dist/`, entry `dist/main.js`). Does not call Requesty:
+
+```powershell
+npm run build
+```
+
+Browser E2E (Playwright, 4 tests: 1 request-flow + 3 intake). Google Chrome must be installed. Playwright uses `channel: 'chrome'`, not bundled Chromium. Stop anything already listening on ports 3000 or 5173.
 
 ```powershell
 npm run test:e2e

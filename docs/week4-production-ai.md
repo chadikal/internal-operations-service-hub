@@ -38,11 +38,13 @@ A draft is shown only after the employee chooses to prepare one. They review and
 
 `title` and `description` on `Request` are ordinary optional product fields. Manual create and intake drafts both use them. Clients that still send only `{ submittedBy, departmentId }` remain valid; omitted text is stored as `null`.
 
+`missingInformation` can list useful optional extras even when the request is already actionable. A non-empty array does not require `draft` to be null, and **Prepare a request** stays available. For example, `"I need an employment certificate from HR."` can return a valid HR draft and still mention purpose or recipient, deadline, or preferred format or language. Those extras are not treated as required. Thin or ambiguous input still gets `draft: null`.
+
 ## Trusted context
 
 The backend loads `{ id, name }` for departments from PostgreSQL (the same source as `GET /departments`) and tells the provider it may only use those IDs. Seeded departments are IT, HR, and Finance. A mention of Legal cannot invent a department.
 
-Runtime uses Requesty (`RequestyAiProvider`) when `AI_PROVIDER=requesty`. Requesty is an OpenAI-compatible gateway; `REQUESTY_MODEL` selects the model. Gemini was used during early development and was replaced because Requesty's free development limits were a better fit for this project.
+Runtime uses Requesty (`RequestyAiProvider`) when `AI_PROVIDER=requesty`. Requesty is an OpenAI-compatible gateway; `REQUESTY_MODEL` selects the model. Gemini was used only during early development and was replaced by Requesty.
 
 Automated tests and evals always use `MockAiProvider` and never call Requesty, the network, or a live model.
 
@@ -115,7 +117,7 @@ npm run eval:ai
 | --- | --- | --- | --- |
 | 1 | Clear problem | My laptop won't connect to Wi-Fi. | `problem`, 3 steps, IT draft, no DB write |
 | 2 | Clear need | I need a laptop. | `need`, no steps, IT draft |
-| 3 | Clear need + department | I need an employment certificate from HR. | `need`, no steps, HR draft |
+| 3 | Clear need + optional extras | I need an employment certificate from HR. | `need`, no steps, actionable HR draft, useful optional `missingInformation` |
 | 4 | Thin | I need help. | missing information, `draft` null |
 | 5 | Ambiguous | My computer is broken and I also need a certificate. | missing information, no department |
 | 6 | Trusted context | Please send this to Legal. | does not invent Legal, `draft` null |
@@ -132,7 +134,7 @@ npm test
 npm run eval:ai
 ```
 
-Browser e2e is unchanged: `npm run test:e2e` still walks John creating an IT request and Chadi starting it. It does not use intake.
+Browser e2e (`npm run test:e2e`) has 4 Playwright tests: 1 existing request-flow test (John creates an IT request and Chadi starts it) plus 3 intake tests (thin input, a clear need, and failed re-analyze). Playwright forces `AI_PROVIDER=mock`.
 
 ## Out of scope
 

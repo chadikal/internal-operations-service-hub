@@ -65,7 +65,11 @@ export function buildMockIntakeOutput(
     return {
       situation: 'need',
       troubleshootingSteps: [],
-      missingInformation: [],
+      missingInformation: [
+        'Purpose or recipient of the certificate',
+        'Deadline if there is one',
+        'Preferred format or language',
+      ],
       draft: {
         departmentId: hrId,
         summary: 'Employment certificate',

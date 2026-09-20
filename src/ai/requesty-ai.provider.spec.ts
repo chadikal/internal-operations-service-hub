@@ -123,6 +123,14 @@ describe('RequestyAiProvider', () => {
     expect(prompt).toMatch(/situation "need" does not mean a draft is ready/);
   });
 
+  it('tells the model a clear request can list optional extras and still keep a draft', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toMatch(/employment certificate from HR/);
+    expect(prompt).toMatch(/purpose or recipient, deadline, and preferred format or language/);
+    expect(prompt).toMatch(/must not set draft to null/);
+    expect(prompt).toMatch(/Do not invent required information/);
+  });
+
   it('throws on HTTP failure so the service can map it to 503', async () => {
     process.env.REQUESTY_API_KEY = 'test-key-not-real';
     const fetchImpl = jest.fn().mockResolvedValue(jsonResponse({ error: 'down' }, 503));

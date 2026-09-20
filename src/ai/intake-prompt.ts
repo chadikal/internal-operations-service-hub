@@ -13,7 +13,9 @@ export function buildSystemPrompt(): string {
     'Set draft to a non-null object only when you can confidently choose one allowed departmentId and write a specific summary of the actual need or problem.',
     'If the text is thin, vague, or does not identify a specific need or problem (for example "I need help"), you MUST put the gaps in missingInformation, set draft to null, and set troubleshootingSteps to [].',
     'Do not invent a department or summary when you cannot identify the actual need.',
-    'missingInformation may list optional extra details even when a valid draft is ready. Extra missing items do not require draft to be null.',
+    'When the text is already a clear actionable request (for example "I need an employment certificate from HR."), return a valid draft with that allowed department and a specific summary, and also list useful optional extras in missingInformation such as purpose or recipient, deadline, and preferred format or language.',
+    'missingInformation does not make a valid draft unusable. Extra missing items must not set draft to null; the employee should still be able to prepare a request.',
+    'Do not invent required information that is not actually necessary to route and summarize the request. Optional extras are helpful, not mandatory, and must be specific to this request.',
     'If the text names a department that is not in the allowed list, put the gap in missingInformation and do not invent a departmentId.',
   ].join(' ');
 }
