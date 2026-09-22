@@ -12,7 +12,7 @@ Week 4 / v0.4 is the current slice: the Week 3 React + NestJS + PostgreSQL app p
 
 An employee can describe a need in free text. The API analyzes it with Requesty at runtime (`AI_PROVIDER=requesty`) and returns troubleshooting and/or a draft. Intake never creates a request; the employee reviews the draft and submits through the existing Create Request path. Automated tests and evals use `MockAiProvider`.
 
-This is not the full application. There is no real authentication. `X-Actor-Id` is a temporary demo stand-in. Approvals, employee CRUD, and department CRUD are out of scope.
+This is not the full application. There is no real authentication. `X-Actor-Id` is a temporary demo stand-in. Approvals, account administration, and department administration are not implemented in this slice. Confirmed plans for that later work are in [Planned full product](#planned-full-product-not-implemented).
 
 Stack:
 
@@ -28,6 +28,24 @@ Temporary actor identity: header `X-Actor-Id`. The UI has `Acting as: Chadi | Jo
 Lifecycle for this slice: `SUBMITTED → IN_PROGRESS → COMPLETED`. `COMPLETED` is terminal. A current owner is required before a transition.
 
 Seeded actors: Chadi (`id=1`, IT, `canHandle=true`), John (`id=2`, IT, `canHandle=false`). Department `1` is IT.
+
+## Planned full product (not implemented)
+
+`docs/product-spec.md` is the source for confirmed future requirements. In short: email/password sign-in with JWT and no public registration; Super Admin provisions accounts, and the first Super Admin comes from a one-time setup command; each account has one role, Employee, Department Admin, or Super Admin; handler eligibility is a separate permission; people see their own submissions; the claimable queue is eligible unassigned requests in their department, and Assigned to me is the separate list of requests they personally own; colleagues' assigned requests appear on neither list; Super Admin sees all; eligible people claim from the claimable queue, only in their department, never their own submissions, and concurrent claims leave one owner; approval is configurable per department and request type and is captured on the request. A request that requires approval becomes claimable only after approval. Denial keeps the work status, sets approval state to Denied, and never unlocks claiming. Resubmission creates a new request. Deactivation immediately blocks login and new claims, and is rejected while the account owns unfinished work. Work status stays `SUBMITTED → IN_PROGRESS → COMPLETED`.
+
+Release and reassignment, password reset, and JWT/session design are still open. Do not treat them as decided.
+
+## Development workflow
+
+Each feature follows this sequence:
+
+1. **Define.** Write the requirement, acceptance criteria, and any unresolved decisions in the product docs before coding.
+2. **Plan.** Name the smallest change to the current system, what the backend still owns, and which tests will prove it.
+3. **Implement.** Change only what that plan covers.
+4. **Prove.** Add automated tests for the success path, failure cases, and permission denials. Run the relevant tests and regression checks, the production build and type checks, and the AI evals when the change touches intake. Record the actual results, or the blocker if a check could not be run.
+5. **Review.** Update the docs that describe current behavior, include those recorded results, and check the outcome against the acceptance criteria.
+
+Weekly notes under `docs/week2-*`, `docs/week3-*`, and `docs/week4-*` stay records of those deliveries.
 
 ## Install
 
@@ -170,9 +188,9 @@ npm run test:e2e
 
 ## Documentation
 
-- `docs/product-spec.md` — Week 1 problem, requirements, unknowns
-- `docs/architecture.md` — actors, components, flow, authorization decision
-- `docs/data-model.md` — entities and relationships
+- `docs/product-spec.md` — problem, implemented Week 4 behavior, confirmed full-product requirements, and remaining decisions
+- `docs/architecture.md` — Week 1 architecture record plus proposed full-product changes
+- `docs/data-model.md` — Week 1 conceptual model, Week 4 schema notes, and proposed additions
 - `docs/decisions/ADR-001.md` — synchronous request submission
 - `docs/week2-agentic-workflow.md` — Week 2 in-memory lifecycle notes
 - `docs/week3-agentic-workflow.md` — Week 3 implementation notes
@@ -185,4 +203,4 @@ Week 1 left exact statuses, ownership, and authentication unknown. Week 2 implem
 
 Those in-memory IDs and PowerShell cases are **not** the current system. Current evidence is the UI flow above plus `npm test` and `npm run test:e2e`.
 
-At the full-product level, authentication, approvals, confidentiality, and extra request fields remain undefined. This slice does not resolve them.
+Authentication, approvals, and administration are specified as planned work in `docs/product-spec.md`. They are not implemented. Open decisions, including confidentiality beyond the visibility rules, stay in that file.

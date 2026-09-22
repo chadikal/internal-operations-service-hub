@@ -1,5 +1,16 @@
 # Internal Operations Service Hub - Data Model
 
+The entity list below is the Week 1 conceptual model. It is not a mirror of the current Prisma schema, and it is not the planned full-product schema.
+
+Implemented through Week 4, in `prisma/schema.prisma`:
+
+- `Employee` has `name`, `departmentId`, and `canHandle`. There is no email, password, or role.
+- `Request` has optional `title` and `description`, `currentOwnerId`, and status `SUBMITTED`, `IN_PROGRESS`, or `COMPLETED`.
+- `RequestStatusHistory` stores successful work-status changes.
+- There is no `Approval` table, request type, company profile, or account table.
+
+Week 1 sentences below that say statuses, title, and description are unknown describe that original pass. The implementation notes above are the current database. [Proposed additions](#proposed-additions-not-implemented) are confirmed product needs that are not in Prisma yet.
+
 ## Domain
 
 ### Entities
@@ -212,3 +223,16 @@ Approval.request_id
 
 
 An index on `Request.current_status` is not added yet because filtering Requests by status has not been confirmed as an important access pattern.
+
+## Proposed additions (not implemented)
+
+These concepts follow the confirmed requirements in `docs/product-spec.md`. Field names here are labels for the concept, not a migration.
+
+- **Account credentials.** An account needs an email and a password hash so the API can issue a JWT. Role is exactly one of Employee, Department Admin, or Super Admin. Handler eligibility is a separate permission managed by Super Admin. There is no public registration. Super Admin provisions accounts. The first Super Admin is created with a one-time setup command.
+- **Deactivation.** A deactivated account cannot sign in, perform authenticated actions, or claim. History is kept. Deactivation is rejected while the account owns a request whose work status is not `COMPLETED`.
+- **Request type.** Super Admin manages request types. Approval configuration is per department and request type.
+- **Captured approval requirement.** When a request is created, the approval requirement in force is stored on that request. Later setting changes do not rewrite it.
+- **Approval decision.** Separate from work status. Stores who decided, the outcome, when, and the denial reason when the outcome is deny. Denial sets the approval state to Denied and leaves work status unchanged. A request that requires approval is on the claimable queue only after approval. Denial never puts it there. Resubmission is a new Request; the original decision stays. The submitter cannot be the decider for their own request. The claimable queue is eligible unassigned requests. Assigned to me is the separate set of requests that account owns.
+- **Company details.** Super Admin manages them. Which fields they contain is still unknown.
+
+Still unknown, so this model does not add behavior for them: release and reassignment, password reset, and JWT lifetime, refresh, and logout.

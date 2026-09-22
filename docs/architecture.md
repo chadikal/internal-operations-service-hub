@@ -1,5 +1,7 @@
 # Internal Operations Service Hub - Architecture
 
+The sections from Requirement through Architecture Decisions are the Week 1 architecture record. Week 4 is what the repository runs today: a React UI, a NestJS API, PostgreSQL, temporary `X-Actor-Id` identity, manual owner assignment, and advisory intake. Confirmed later changes are in [Proposed full-product changes](#proposed-full-product-changes-not-implemented). They are not implemented. Remaining decisions are listed in `docs/product-spec.md` and are not chosen here.
+
 ## Requirement
 
 Employees can submit help requests to the appropriate department.
@@ -146,3 +148,49 @@ Decision: The backend verifies permissions.
 Reason: This prevents users from bypassing access rules through the UI.
 
 Consequence: The backend must check authorization before processing requests.
+
+## Proposed full-product changes (not implemented)
+
+Confirmed product rules are in `docs/product-spec.md`. This section only says how those rules sit on the Week 1 architecture. Release, reassignment, password reset, and JWT/session design are still open there.
+
+### Identity
+
+Email and password authentication replaces `X-Actor-Id`. There is no public registration. Super Admin provisions accounts. The first Super Admin is created with a one-time setup command. The backend issues and verifies a JWT and then applies role and handler-eligibility checks. Password reset and JWT lifetime, refresh, and logout are still open. The Week 1 rule stands: the backend does not trust identity or permissions sent only by the UI.
+
+Deactivation immediately blocks login and authenticated actions, keeps history, and blocks new claims. It is rejected while the account owns a request that is not `COMPLETED`.
+
+### Actors
+
+Planned roles are Employee, Department Admin, and Super Admin. Each account has one role. Handler eligibility is a separate permission. The Week 1 "department staff" actor is covered by those roles for new work. The current `canHandle` flag is the temporary stand-in for handler eligibility.
+
+### Ownership
+
+Week 4 still assigns an owner with `PATCH /requests/:id/owner`. The planned path removes manual admin assignment. The claimable queue holds eligible unassigned requests. Assigned to me is a separate list of requests that person owns. An account with handler eligibility claims from the claimable queue, and only in their department. The claim rejects the submitter. A request that requires approval enters that queue only after approval. Denial never unlocks claiming. Concurrent claims leave exactly one owner. The mechanism that enforces that single owner is an implementation choice for the feature that adds claiming. Department Admins and Super Admins claim only when handler eligibility is explicitly granted.
+
+### Approval
+
+ADR-001 still holds: submission stays synchronous, and approval does not block storing the request. When the requirement captured on that request says approval is required, the request stays out of the claimable queue until a destination Department Admin or Super Admin approves it. The submitter still sees it, authorized approvers see it in the approval inbox, and Super Admin sees it with every other request. Denial stores a reason, leaves work status unchanged, and sets approval state to Denied. That request cannot be claimed. Resubmission creates a new request and keeps the original decision. Approval state stays off the work-status field. Work status remains `SUBMITTED → IN_PROGRESS → COMPLETED`.
+
+### Proposed claim flow
+
+```mermaid
+flowchart LR
+    Employee[Employee]
+    Handler[Account with handler eligibility]
+    Admin[Department Admin or Super Admin]
+
+    subgraph Hub[Planned hub]
+        UI[User Interface]
+        API[Backend]
+        DB[(Database)]
+    end
+
+    Employee -->|Sign in and submit| UI
+    UI -->|JWT plus request| API
+    API -->|Store SUBMITTED and captured approval rule| DB
+    Admin -->|Approve or deny| API
+    Handler -->|Claim| API
+    API -->|One owner| DB
+```
+
+The Week 1 submission diagram above remains the record of the original synchronous submit path.
