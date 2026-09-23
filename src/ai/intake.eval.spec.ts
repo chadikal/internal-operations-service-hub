@@ -79,8 +79,9 @@ describe('AI intake evals', () => {
     expect(response.body.draft.departmentId).toBe(HR);
     expect(response.body.draft.summary).toBeTruthy();
     expect(isActionableIntakeDraft(response.body.draft)).toBe(true);
-    expect(response.body.missingInformation.length).toBeGreaterThan(0);
-    expect(response.body.missingInformation.join(' ')).toMatch(
+    expect(response.body.missingInformation).toEqual([]);
+    expect(response.body.suggestions.length).toBeGreaterThan(0);
+    expect(response.body.suggestions.join(' ')).toMatch(
       /purpose|recipient|deadline|format|language/i,
     );
     expect(await countAuthoritativeRows(prisma)).toEqual({ requests: 0, history: 0 });

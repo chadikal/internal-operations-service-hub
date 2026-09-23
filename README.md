@@ -47,7 +47,7 @@ Create a database named `operations_hub`. Copy `.env.example` to `.env` and set 
 ```env
 DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@localhost:5432/operations_hub"
 AI_PROVIDER=requesty
-REQUESTY_MODEL=nemotron-3.5-lightning-30b-a3b
+REQUESTY_MODEL=gemma-4-31b-it
 REQUESTY_API_KEY=
 ```
 

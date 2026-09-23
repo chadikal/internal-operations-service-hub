@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import * as request from 'supertest';
 import { RequestyAiProvider } from './requesty-ai.provider';
 import { PrismaService } from '../prisma/prisma.service';
@@ -145,10 +146,17 @@ describe('AI intake HTTP boundary', () => {
 
   it('maps a Requesty HTTP failure to 503 without creating a request or history', async () => {
     process.env.REQUESTY_API_KEY = 'test-key-not-real';
+    const errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     const provider = new RequestyAiProvider(async () => ({
       ok: false,
-      status: 503,
-      json: async () => ({ error: 'unavailable' }),
+      status: 429,
+      json: async () => ({
+        error: {
+          message: 'upstream-rate-limit-detail',
+          type: 'rate_limit_error',
+          code: 'rate_limit_exceeded',
+        },
+      }),
     }));
     const { app, prisma } = await createTestApp(provider);
     try {
@@ -159,9 +167,22 @@ describe('AI intake HTTP boundary', () => {
         .send({ text: 'I need a laptop.' });
 
       expect(response.status).toBe(503);
-      expect(response.body.message).toMatch(/unavailable/i);
+      expect(response.body.message).toBe(
+        'The intake assistant is unavailable. Try again later.',
+      );
+      expect(JSON.stringify(response.body)).not.toContain('upstream-rate-limit-detail');
+      expect(JSON.stringify(response.body)).not.toContain('rate_limit_exceeded');
+      expect(JSON.stringify(response.body)).not.toContain('test-key-not-real');
+      const logged = errorSpy.mock.calls.map((call) => String(call[0])).join('\n');
+      expect(logged).toContain(
+        'Requesty intake upstream failure: Requesty request failed with status 429',
+      );
+      expect(logged).toContain('code=rate_limit_exceeded');
+      expect(logged).toContain('message=upstream-rate-limit-detail');
+      expect(logged).not.toContain('test-key-not-real');
       expect(await countAuthoritativeRows(prisma)).toEqual({ requests: 0, history: 0 });
     } finally {
+      errorSpy.mockRestore();
       delete process.env.REQUESTY_API_KEY;
       await cleanRequestData(prisma);
       await closeTestApp(app);

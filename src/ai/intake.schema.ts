@@ -12,6 +12,7 @@ export type IntakeResult = {
   situation: IntakeSituation;
   troubleshootingSteps: string[];
   missingInformation: string[];
+  suggestions: string[];
   draft: IntakeDraft | null;
 };
 
@@ -19,6 +20,7 @@ const RESULT_KEYS = new Set([
   'situation',
   'troubleshootingSteps',
   'missingInformation',
+  'suggestions',
   'draft',
 ]);
 
@@ -127,6 +129,12 @@ export function validateIntakeResult(
     MAX_MISSING_ITEMS,
     MAX_MISSING_LENGTH,
   );
+  const suggestions = clampStringList(
+    obj.suggestions,
+    'suggestions',
+    MAX_MISSING_ITEMS,
+    MAX_MISSING_LENGTH,
+  );
 
   let troubleshootingSteps = clampStringList(
     obj.troubleshootingSteps,
@@ -144,6 +152,7 @@ export function validateIntakeResult(
     situation,
     troubleshootingSteps,
     missingInformation,
+    suggestions,
     draft,
     employeeText,
   );
@@ -153,6 +162,7 @@ function sanitizeUnactionableResult(
   situation: IntakeSituation,
   troubleshootingSteps: string[],
   missingInformation: string[],
+  suggestions: string[],
   draft: IntakeDraft | null,
   employeeText?: string,
 ): IntakeResult {
@@ -167,6 +177,7 @@ function sanitizeUnactionableResult(
       situation,
       troubleshootingSteps: [],
       missingInformation,
+      suggestions,
       draft: null,
     };
   }
@@ -175,6 +186,7 @@ function sanitizeUnactionableResult(
     situation,
     troubleshootingSteps,
     missingInformation,
+    suggestions,
     draft,
   };
 }

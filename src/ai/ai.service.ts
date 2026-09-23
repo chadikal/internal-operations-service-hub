@@ -3,6 +3,7 @@ import {
   BadRequestException,
   Inject,
   Injectable,
+  Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
@@ -12,6 +13,8 @@ import { InvalidAiOutputError } from './invalid-ai-output.error';
 
 @Injectable()
 export class AiService {
+  private readonly logger = new Logger(AiService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     @Inject(AI_PROVIDER) private readonly provider: AiProvider,
@@ -36,6 +39,11 @@ export class AiService {
       if (error instanceof InvalidAiOutputError) {
         throw new BadGatewayException('The intake assistant returned an invalid result.');
       }
+      const detail = error instanceof Error ? error.message : 'Requesty request failed';
+      this.logger.error(
+        `Requesty intake upstream failure: ${detail}`,
+        error instanceof Error ? error.stack : undefined,
+      );
       throw new ServiceUnavailableException(
         'The intake assistant is unavailable. Try again later.',
       );

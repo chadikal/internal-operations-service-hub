@@ -30,6 +30,27 @@ function formatWhen(value: string) {
   return date.toLocaleString();
 }
 
+function hasMissingRequiredInformation(result: IntakeResult | null): boolean {
+  return (result?.missingInformation.length ?? 0) > 0;
+}
+
+function intakeSuggestions(result: IntakeResult | null): string[] {
+  return result?.suggestions ?? [];
+}
+
+function chooseIntakeStep(result: IntakeResult): IntakeStep {
+  if (result.situation === 'problem' && result.troubleshootingSteps.length > 0) {
+    return 'troubleshoot';
+  }
+  if (hasMissingRequiredInformation(result)) {
+    return 'input';
+  }
+  if (hasActionableIntakeDraft(result.draft)) {
+    return 'offer';
+  }
+  return 'input';
+}
+
 export default function App() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
@@ -188,19 +209,17 @@ export default function App() {
     void run(async () => {
       const result = await analyzeIntake(actorId, intakeText);
       setIntakeResult(result);
-      if (result.situation === 'problem' && result.troubleshootingSteps.length > 0) {
-        setIntakeStep('troubleshoot');
-      } else if (hasActionableIntakeDraft(result.draft)) {
-        setIntakeStep('offer');
-      } else {
-        setIntakeStep('input');
-      }
+      setIntakeStep(chooseIntakeStep(result));
     });
   }
 
   function onProblemSolved(solved: boolean) {
     if (solved) {
       setIntakeStep('resolved');
+      return;
+    }
+    if (hasMissingRequiredInformation(intakeResult)) {
+      setIntakeStep('input');
       return;
     }
     if (hasActionableIntakeDraft(intakeResult?.draft)) {
@@ -211,7 +230,13 @@ export default function App() {
   }
 
   function onPrepareRequest(prepare: boolean) {
-    if (!intakeResult || !hasActionableIntakeDraft(intakeResult.draft)) return;
+    if (
+      !intakeResult ||
+      hasMissingRequiredInformation(intakeResult) ||
+      !hasActionableIntakeDraft(intakeResult.draft)
+    ) {
+      return;
+    }
     if (!prepare) {
       setIntakeStep('declined');
       return;
@@ -284,11 +309,23 @@ export default function App() {
           </div>
         ) : null}
 
-        {intakeStep === 'input' &&
-        intakeResult &&
-        !hasActionableIntakeDraft(intakeResult.draft) ? (
+        {intakeSuggestions(intakeResult).length > 0 ? (
+          <div className="notice" data-testid="intake-suggestions">
+            <p>Optional details that may help:</p>
+            <ul>
+              {intakeSuggestions(intakeResult).map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
+        {intakeResult &&
+        (intakeStep === 'input' || intakeStep === 'troubleshoot' || intakeStep === 'offer') &&
+        (hasMissingRequiredInformation(intakeResult) ||
+          (intakeStep === 'input' && !hasActionableIntakeDraft(intakeResult.draft))) ? (
           <p className="muted" data-testid="intake-need-more">
-            Please provide a little more detail so we can understand your request and help
+            Please provide the missing details so we can understand your request and help
             you get it to the right department.
           </p>
         ) : null}
@@ -313,7 +350,7 @@ export default function App() {
           </div>
         ) : null}
 
-        {intakeStep === 'offer' ? (
+        {intakeStep === 'offer' && !hasMissingRequiredInformation(intakeResult) ? (
           <div className="stack">
             {intakeResult?.situation === 'need' ? (
               <p className="muted">
