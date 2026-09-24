@@ -98,6 +98,7 @@ describe('RequestyAiProvider', () => {
       'situation',
       'troubleshootingSteps',
       'missingInformation',
+      'suggestions',
       'draft',
     ]);
   });
@@ -116,6 +117,40 @@ describe('RequestyAiProvider', () => {
     expect(JSON.parse(init.body).model).toBe('custom-requesty-model');
   });
 
+  it('does not retry a client timeout', async () => {
+    process.env.REQUESTY_API_KEY = 'test-key-not-real';
+    const timeoutSpy = jest.spyOn(AbortSignal, 'timeout');
+    const timeout = new Error('The operation was aborted due to timeout');
+    timeout.name = 'TimeoutError';
+    const fetchImpl = jest.fn().mockRejectedValue(timeout);
+    const provider = new RequestyAiProvider(fetchImpl);
+
+    try {
+      await expect(
+        provider.complete({ employeeText: 'I need a laptop.', departments }),
+      ).rejects.toThrow(
+        'Requesty request timed out (TimeoutError: The operation was aborted due to timeout) on attempt 1',
+      );
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(timeoutSpy).toHaveBeenCalledTimes(1);
+      expect(timeoutSpy).toHaveBeenCalledWith(30_000);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it('reads JSON that follows reasoning text', async () => {
+    process.env.REQUESTY_API_KEY = 'test-key-not-real';
+    const fetchImpl = jest.fn().mockResolvedValue(
+      jsonResponse(chatCompletion(`Thinking first.\n${JSON.stringify(intakeJson)}`)),
+    );
+    const provider = new RequestyAiProvider(fetchImpl);
+
+    await expect(
+      provider.complete({ employeeText: 'I need a laptop.', departments }),
+    ).resolves.toEqual(intakeJson);
+  });
+
   it('tells the model not to invent a draft for thin input', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toMatch(/I need help/);
@@ -123,11 +158,24 @@ describe('RequestyAiProvider', () => {
     expect(prompt).toMatch(/situation "need" does not mean a draft is ready/);
   });
 
+  it('tells the model to write every draft description in the employee first person', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toMatch(/first-person perspective/);
+    expect(prompt).toMatch(/submitted as that employee's request/);
+    expect(prompt).toMatch(/I need a certificate from HR/);
+    expect(prompt).toMatch(
+      /The employee is requesting a certificate from the Human Resources department/,
+    );
+    expect(prompt).toMatch(/not only HR certificates/);
+    expect(prompt).toMatch(/Do not invent missing information in the description/);
+  });
+
   it('tells the model a clear request can list optional extras and still keep a draft', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toMatch(/employment certificate from HR/);
     expect(prompt).toMatch(/purpose or recipient, deadline, and preferred format or language/);
-    expect(prompt).toMatch(/must not set draft to null/);
+    expect(prompt).toMatch(/suggestions must not set draft to null/);
+    expect(prompt).toMatch(/Do not put optional or helpful extras in missingInformation/);
     expect(prompt).toMatch(/Do not invent required information/);
   });
 
@@ -138,8 +186,52 @@ describe('RequestyAiProvider', () => {
 
     await expect(
       provider.complete({ employeeText: 'I need a laptop.', departments }),
-    ).rejects.toThrow(/Requesty request failed/);
+    ).rejects.toThrow(
+      'Requesty request failed with status 503 on attempt 3: down; earlier attempts: 503, 503',
+    );
     expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it('includes the Requesty 429 status and error fields after retries are exhausted', async () => {
+    process.env.REQUESTY_API_KEY = 'test-key-not-real';
+    const fetchImpl = jest.fn().mockResolvedValue(
+      jsonResponse(
+        {
+          error: {
+            message: 'Too many requests',
+            type: 'rate_limit_error',
+            code: 'rate_limit_exceeded',
+          },
+        },
+        429,
+      ),
+    );
+    const provider = new RequestyAiProvider(fetchImpl);
+
+    await expect(
+      provider.complete({ employeeText: 'I need a laptop.', departments }),
+    ).rejects.toThrow(
+      'Requesty request failed with status 429 on attempt 3: code=rate_limit_exceeded type=rate_limit_error message=Too many requests; earlier attempts: 429, 429',
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it('includes a non-JSON upstream body and redacts the API key', async () => {
+    process.env.REQUESTY_API_KEY = 'test-key-not-real';
+    const fetchImpl = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: async () => 'rejected test-key-not-real Bearer test-key-not-real',
+      json: async () => ({ error: 'should not be read' }),
+    });
+    const provider = new RequestyAiProvider(fetchImpl);
+
+    await expect(
+      provider.complete({ employeeText: 'I need a laptop.', departments }),
+    ).rejects.toThrow(
+      'Requesty request failed with status 401 on attempt 1: rejected [redacted] Bearer [redacted]',
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it('retries a 429 and then returns structured JSON', async () => {
@@ -163,7 +255,9 @@ describe('RequestyAiProvider', () => {
 
     await expect(
       provider.complete({ employeeText: 'I need a laptop.', departments }),
-    ).rejects.toThrow('Requesty request failed');
+    ).rejects.toThrow(
+      'Requesty request failed (Error: ECONNRESET) on attempt 3; earlier attempts: network Error, network Error',
+    );
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 

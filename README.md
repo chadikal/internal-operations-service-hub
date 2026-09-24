@@ -67,7 +67,7 @@ DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@localhost:5432/operations_hub"
 JWT_SECRET=
 AUTH_ORIGINS=http://localhost:5173
 AI_PROVIDER=requesty
-REQUESTY_MODEL=nemotron-3.5-lightning-30b-a3b
+REQUESTY_MODEL=gemma-4-31b-it
 REQUESTY_API_KEY=
 ```
 
@@ -123,8 +123,8 @@ The UI listens on `http://localhost:5173`.
 
 1. Open `http://localhost:5173` and log in.
 2. In **Request Intake**, describe what you need and click **Analyze**. Nothing is submitted.
-3. A **problem** shows up to 3 troubleshooting steps first. A **need** skips that and offers to prepare a request.
-4. Optional missing details may appear even when a draft is ready; they do not block **Prepare a request**.
+3. A **problem** shows up to 3 troubleshooting steps first. Required missing details keep **Prepare a request** hidden until a later analysis has none. A **need** with no required gaps skips troubleshooting and offers to prepare a request.
+4. Optional **suggestions** may appear with a draft; they do not block **Prepare a request**.
 5. After yes, edit department, title, and description, then click **Create Request** (existing `POST /requests`).
 
 Thin input such as “I need help.” stays on the form with no draft.
@@ -207,7 +207,7 @@ Backend production build (Nest → `dist/`, entry `dist/main.js`). Does not call
 npm run build
 ```
 
-Browser E2E (Playwright, 6 tests: 2 login, 1 request-flow, 3 intake). Google Chrome must be installed. Playwright uses `channel: 'chrome'`, not bundled Chromium. Stop anything already listening on ports 3000 or 5173. The API process is started with a test-only `JWT_SECRET` and `operations_hub_test`.
+Browser E2E (Playwright, 9 tests: 2 login, 1 company signup, 1 request-flow, 5 intake). Google Chrome must be installed. Playwright uses `channel: 'chrome'`, not bundled Chromium. Stop anything already listening on ports 3000 or 5173. The API process is started with a test-only `JWT_SECRET` and `operations_hub_test`.
 
 ```powershell
 npm run test:e2e

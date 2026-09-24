@@ -31,7 +31,7 @@ The running system is the Week 4 request and intake behavior, email/password ses
 - Visibility inside the caller’s company is `canHandle` or "I submitted this request." Role is stored and returned by `GET /auth/me`. It does not yet grant an approval inbox. Super Admin does not yet see every request in the company, and never sees another company’s requests.
 - Work status is `SUBMITTED → IN_PROGRESS → COMPLETED`. `COMPLETED` is terminal. A current owner is required before a transition. Successful transitions append status history.
 - Optional `title` and `description` exist. There are no request types, approval records, or admin management screens. Adding a department and inviting staff are the onboarding actions, not those screens.
-- Advisory intake can suggest troubleshooting and a draft from the caller’s own departments. It does not create or change a request. The employee submits through the existing create path.
+- Advisory intake can suggest troubleshooting and a draft from the caller’s own departments. Required missing details block preparing a request; optional suggestions do not. It does not create or change a request. The employee submits through the existing create path.
 - Departments in the Development company seed are IT, HR, and Finance. Existing employee rows keep their ids. Email and password hash stay empty until credentials are set, so those rows cannot log in yet.
 
 ## Confirmed full-product requirements (planned)

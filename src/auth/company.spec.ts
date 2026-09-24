@@ -41,6 +41,7 @@ const recordingProvider: AiProvider = {
       situation: 'need',
       troubleshootingSteps: [],
       missingInformation: [],
+      suggestions: [],
       draft: null,
     };
   },

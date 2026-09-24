@@ -29,6 +29,7 @@ export function buildMockIntakeOutput(
       missingInformation: [
         'The requested department is not available. Choose IT, HR, or Finance, or add more detail.',
       ],
+      suggestions: [],
       draft: null,
     };
   }
@@ -45,6 +46,7 @@ export function buildMockIntakeOutput(
       missingInformation: [
         'This message describes more than one need. Say whether you want help with a computer problem or an HR document.',
       ],
+      suggestions: [],
       draft: null,
     };
   }
@@ -57,6 +59,7 @@ export function buildMockIntakeOutput(
         'What you need help with',
         'Which department should handle this',
       ],
+      suggestions: [],
       draft: null,
     };
   }
@@ -65,7 +68,8 @@ export function buildMockIntakeOutput(
     return {
       situation: 'need',
       troubleshootingSteps: [],
-      missingInformation: [
+      missingInformation: [],
+      suggestions: [
         'Purpose or recipient of the certificate',
         'Deadline if there is one',
         'Preferred format or language',
@@ -91,6 +95,7 @@ export function buildMockIntakeOutput(
         'Restart the laptop and try another known working network if one is available.',
       ],
       missingInformation: [],
+      suggestions: [],
       draft: {
         departmentId: itId,
         summary: 'Laptop cannot connect to Wi-Fi',
@@ -104,6 +109,7 @@ export function buildMockIntakeOutput(
       situation: 'need',
       troubleshootingSteps: [],
       missingInformation: [],
+      suggestions: [],
       draft: {
         departmentId: itId,
         summary: 'Laptop request',
@@ -118,6 +124,7 @@ export function buildMockIntakeOutput(
     missingInformation: [
       'More detail about what you need so a department and summary can be suggested.',
     ],
+    suggestions: [],
     draft: null,
   };
 }

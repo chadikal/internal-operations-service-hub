@@ -25,6 +25,7 @@ describe('validateIntakeResult', () => {
 
     expect(result.situation).toBe('need');
     expect(result.troubleshootingSteps).toEqual([]);
+    expect(result.suggestions).toEqual([]);
     expect(result.draft?.departmentId).toBe(1);
   });
 
@@ -60,12 +61,13 @@ describe('validateIntakeResult', () => {
     );
   });
 
-  it('keeps an actionable draft when missingInformation has optional extra details', () => {
+  it('keeps an actionable draft when suggestions list optional extra details', () => {
     const result = validateIntakeResult(
       {
         situation: 'need',
         troubleshootingSteps: [],
-        missingInformation: ['Purpose of the certificate', 'Preferred language'],
+        missingInformation: [],
+        suggestions: ['Purpose of the certificate', 'Preferred language'],
         draft: {
           departmentId: 2,
           summary: 'Employment certificate',
@@ -81,11 +83,34 @@ describe('validateIntakeResult', () => {
       summary: 'Employment certificate',
       description: 'I need an employment certificate from HR.',
     });
-    expect(result.missingInformation).toEqual([
+    expect(result.missingInformation).toEqual([]);
+    expect(result.suggestions).toEqual([
       'Purpose of the certificate',
       'Preferred language',
     ]);
     expect(isActionableIntakeDraft(result.draft)).toBe(true);
+  });
+
+  it('keeps required missing information separate from optional suggestions', () => {
+    const result = validateIntakeResult(
+      {
+        situation: 'need',
+        troubleshootingSteps: [],
+        missingInformation: ['Which dates the certificate should cover'],
+        suggestions: ['Preferred language'],
+        draft: {
+          departmentId: 2,
+          summary: 'Employment certificate',
+          description: 'I need an employment certificate.',
+        },
+      },
+      ALLOWED,
+      'I need an employment certificate.',
+    );
+
+    expect(result.draft?.departmentId).toBe(2);
+    expect(result.missingInformation).toEqual(['Which dates the certificate should cover']);
+    expect(result.suggestions).toEqual(['Preferred language']);
   });
 
   it('discards an invented complete draft for thin employee text', () => {

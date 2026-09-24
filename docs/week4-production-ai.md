@@ -27,7 +27,8 @@ A draft is shown only after the employee chooses to prepare one. They review and
 {
   situation: 'problem' | 'need',
   troubleshootingSteps: string[],      // 0–3; forced empty when situation is need
-  missingInformation: string[],
+  missingInformation: string[],        // required gaps; blocks preparing a request
+  suggestions: string[],               // optional extras; does not block a request
   draft: {
     departmentId: number | null,       // must exist in Department, else null
     summary: string | null,            // suggested title
@@ -38,7 +39,7 @@ A draft is shown only after the employee chooses to prepare one. They review and
 
 `title` and `description` on `Request` are ordinary optional product fields. Manual create and intake drafts both use them. Clients that still send only `{ submittedBy, departmentId }` remain valid; omitted text is stored as `null`.
 
-`missingInformation` can list useful optional extras even when the request is already actionable. A non-empty array does not require `draft` to be null, and **Prepare a request** stays available. For example, `"I need an employment certificate from HR."` can return a valid HR draft and still mention purpose or recipient, deadline, or preferred format or language. Those extras are not treated as required. Thin or ambiguous input still gets `draft: null`.
+`missingInformation` lists details that are required before a request can be prepared. When it is not empty, the UI shows that list and asks the employee to provide the missing details. **Prepare a request** and **No thanks** stay hidden until a later analysis returns no required gaps. `suggestions` lists optional helpful extras and does not block preparation. For example, `"I need an employment certificate from HR."` can return a valid HR draft, an empty `missingInformation` array, and suggestions such as purpose or recipient, deadline, or preferred format or language. Thin or ambiguous input still gets `draft: null` and required gaps in `missingInformation`.
 
 ## Trusted context
 
@@ -57,7 +58,7 @@ Copy these from `.env.example` into `.env`. Do not commit a real key.
 ```env
 AI_PROVIDER=requesty
 REQUESTY_API_KEY=
-REQUESTY_MODEL=nemotron-3.5-lightning-30b-a3b
+REQUESTY_MODEL=gemma-4-31b-it
 ```
 
 Jest, `npm run eval:ai`, and Playwright force `AI_PROVIDER=mock` even if `.env` says `requesty`.
@@ -91,8 +92,8 @@ The Week 3 Create Request card remains. Intake is a separate card on the same vi
 
 1. Employee enters free text and clicks Analyze (one provider call).
 2. Problem with steps → show steps → “Did this solve the problem?”
-3. Solved → stop. Unresolved → “Prepare a request?”
-4. Need → skip steps → “Prepare a request?”
+3. Solved → stop. Unresolved with no required gaps → “Prepare a request?”. Unresolved with required gaps → ask for the missing details instead.
+4. Need with required gaps → show the missing list and ask for those details. Do not offer to prepare a request until a later analysis has no required gaps. A need with no required gaps skips steps and asks “Prepare a request?”. Optional `suggestions` can appear either way and do not hide that question.
 5. After yes, show an editable draft (department, title, description).
 6. Create Request calls the existing create API.
 
@@ -117,7 +118,7 @@ npm run eval:ai
 | --- | --- | --- | --- |
 | 1 | Clear problem | My laptop won't connect to Wi-Fi. | `problem`, 3 steps, IT draft, no DB write |
 | 2 | Clear need | I need a laptop. | `need`, no steps, IT draft |
-| 3 | Clear need + optional extras | I need an employment certificate from HR. | `need`, no steps, actionable HR draft, useful optional `missingInformation` |
+| 3 | Clear need + optional extras | I need an employment certificate from HR. | `need`, no steps, actionable HR draft, empty required `missingInformation`, useful optional `suggestions` |
 | 4 | Thin | I need help. | missing information, `draft` null |
 | 5 | Ambiguous | My computer is broken and I also need a certificate. | missing information, no department |
 | 6 | Trusted context | Please send this to Legal. | does not invent Legal, `draft` null |
@@ -134,7 +135,7 @@ npm test
 npm run eval:ai
 ```
 
-Browser e2e (`npm run test:e2e`) has 4 Playwright tests: 1 existing request-flow test (John creates an IT request and Chadi starts it) plus 3 intake tests (thin input, a clear need, and failed re-analyze). Playwright forces `AI_PROVIDER=mock`.
+Browser e2e (`npm run test:e2e`) has 6 Playwright tests: 1 existing request-flow test (John creates an IT request and Chadi starts it) plus 5 intake tests (thin input, a clear need, failed re-analyze, optional suggestions, and required missing information). Playwright forces `AI_PROVIDER=mock`.
 
 ## Out of scope
 

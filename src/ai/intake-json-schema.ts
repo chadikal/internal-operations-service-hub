@@ -15,7 +15,13 @@ export const INTAKE_JSON_SCHEMA = {
       type: 'array',
       items: { type: 'string' },
       description:
-        'Optional extra details the employee can add. A valid draft may still be present when this array is not empty.',
+        'Details required before a request can be prepared. When this array is not empty, draft must be null. Do not put optional extras here.',
+    },
+    suggestions: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        'Optional helpful details. These do not block preparing a request. A valid draft may still be present when this array is not empty.',
     },
     draft: {
       description:
@@ -28,12 +34,16 @@ export const INTAKE_JSON_SCHEMA = {
           properties: {
             departmentId: { anyOf: [{ type: 'integer' }, { type: 'null' }] },
             summary: { anyOf: [{ type: 'string' }, { type: 'null' }] },
-            description: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+            description: {
+              anyOf: [{ type: 'string' }, { type: 'null' }],
+              description:
+                'First-person text the employee will submit, such as "I need a certificate from HR". Preserve their meaning and details. Do not invent missing information or write in the third person.',
+            },
           },
           required: ['departmentId', 'summary', 'description'],
         },
       ],
     },
   },
-  required: ['situation', 'troubleshootingSteps', 'missingInformation', 'draft'],
+  required: ['situation', 'troubleshootingSteps', 'missingInformation', 'suggestions', 'draft'],
 };

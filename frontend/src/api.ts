@@ -64,6 +64,7 @@ export type IntakeResult = {
   situation: 'problem' | 'need';
   troubleshootingSteps: string[];
   missingInformation: string[];
+  suggestions?: string[];
   draft: IntakeDraft | null;
 };
 
