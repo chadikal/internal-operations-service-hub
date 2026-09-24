@@ -2,7 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import * as request from 'supertest';
 import { PrismaService } from '../prisma/prisma.service';
 import {
-  asActor,
+  authHeaders,
   CHADI,
   cleanRequestData,
   closeTestApp,
@@ -34,21 +34,21 @@ describe('Request visibility business rules', () => {
   it('lets John view his own request and lets Chadi view it as a handler', async () => {
     const created = await request(app.getHttpServer())
       .post('/requests')
-      .set(asActor(JOHN))
+      .set(await authHeaders(app, prisma, JOHN))
       .send({ submittedBy: JOHN, departmentId: IT });
     expect(created.status).toBe(201);
     const id = created.body.id as number;
 
     const johnViewsOwn = await request(app.getHttpServer())
       .get(`/requests/${id}`)
-      .set(asActor(JOHN));
+      .set(await authHeaders(app, prisma, JOHN));
     expect(johnViewsOwn.status).toBe(200);
     expect(johnViewsOwn.body.id).toBe(id);
     expect(johnViewsOwn.body.submittedBy).toBe(JOHN);
 
     const chadiViewsJohns = await request(app.getHttpServer())
       .get(`/requests/${id}`)
-      .set(asActor(CHADI));
+      .set(await authHeaders(app, prisma, CHADI));
     expect(chadiViewsJohns.status).toBe(200);
     expect(chadiViewsJohns.body.id).toBe(id);
     expect(chadiViewsJohns.body.submittedBy).toBe(JOHN);
@@ -57,14 +57,14 @@ describe('Request visibility business rules', () => {
   it('forbids John from viewing another employee request', async () => {
     const created = await request(app.getHttpServer())
       .post('/requests')
-      .set(asActor(CHADI))
+      .set(await authHeaders(app, prisma, CHADI))
       .send({ submittedBy: CHADI, departmentId: IT });
     expect(created.status).toBe(201);
     const id = created.body.id as number;
 
     const johnViewsChadis = await request(app.getHttpServer())
       .get(`/requests/${id}`)
-      .set(asActor(JOHN));
+      .set(await authHeaders(app, prisma, JOHN));
     expect(johnViewsChadis.status).toBe(403);
     expect(johnViewsChadis.body.message).toMatch(/not allowed to view/i);
   });

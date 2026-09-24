@@ -18,27 +18,33 @@ This leads to forgotten requests, requests being sent to the wrong person, and u
 - Request ownership, status, and approval are unclear.
 - The company wants one system to submit, handle, and follow requests.
 
-## Implemented through Week 4
+## Implemented through Week 4, plus authentication and company signup
 
-The running system is the Week 4 slice. It is not the full product below.
+The running system is the Week 4 request and intake behavior, email/password sessions from ADR-002, and company signup from ADR-003. Weekly notes under `docs/week4-*` still describe the older `X-Actor-Id` slice and were not rewritten.
 
-- Identity is the `X-Actor-Id` header plus an `Acting as` switcher. There is no login.
-- Seeded people are employees with `canHandle`. A handler may be assigned as owner through `PATCH /requests/:id/owner`. The owner cannot be the submitter.
-- Visibility is `canHandle` or "I submitted this request."
+- A founder creates a company workspace with company name, their name, email, and password. The workspace and that Super Admin stay inactive until the email is verified. There is no public employee signup and no “working alone or in a team” question.
+- After verification, that Super Admin can add a department in the company and invite staff. Invitees set their own passwords. The first-Super-Admin command is not the onboarding path and does not create an account.
+- Sign-in is email and password. The UI has a login form and logout. There is no Acting-as switcher.
+- Protected routes use the `hub_session` cookie. `X-Actor-Id` is ignored. `submittedBy` and `changedBy` must match the signed-in account.
+- Every account, department, request, status-history row, and session belongs to one company. A caller cannot read or change another company’s data by sending its ids.
+- Seeded people are still Chadi (`canHandle=true`) and John (`canHandle=false`), now in the migrated Development company. A handler may be assigned as owner through `PATCH /requests/:id/owner`. The owner cannot be the submitter. A Super Admin without `canHandle` cannot assign or transition.
+- Visibility inside the caller’s company is `canHandle` or "I submitted this request." Role is stored and returned by `GET /auth/me`. It does not yet grant an approval inbox. Super Admin does not yet see every request in the company, and never sees another company’s requests.
 - Work status is `SUBMITTED → IN_PROGRESS → COMPLETED`. `COMPLETED` is terminal. A current owner is required before a transition. Successful transitions append status history.
-- Optional `title` and `description` exist. There are no request types, approval records, or admin management screens.
-- Advisory intake can suggest troubleshooting and a draft. It does not create or change a request. The employee submits through the existing create path.
-- Departments in the seed are IT, HR, and Finance.
+- Optional `title` and `description` exist. There are no request types, approval records, or admin management screens. Adding a department and inviting staff are the onboarding actions, not those screens.
+- Advisory intake can suggest troubleshooting and a draft from the caller’s own departments. It does not create or change a request. The employee submits through the existing create path.
+- Departments in the Development company seed are IT, HR, and Finance. Existing employee rows keep their ids. Email and password hash stay empty until credentials are set, so those rows cannot log in yet.
 
 ## Confirmed full-product requirements (planned)
 
-These decisions are confirmed for later implementation. They are not in the Week 4 system.
+These decisions are confirmed for later implementation. Login, company signup, and company-scoped invitations from ADR-002 and ADR-003 are implemented. Claiming, approvals, admin screens, and password reset are not.
 
 ### Authentication
 
-People sign in with email and password. There is no public registration. Super Admin provisions accounts. The first Super Admin is created with a one-time setup command.
+People sign in with email and password. There is no public employee signup. A founder creates a company and becomes its first Super Admin after email verification. That Super Admin invites later accounts in the same company, and those people set their own passwords. Company signup and invitations are implemented and recorded in `docs/decisions/ADR-003-company-signup.md`. Session behavior from ADR-002 remains.
 
-The API issues a JWT. The backend verifies that token and enforces permissions. The UI is not the source of identity or authorization. `X-Actor-Id` is temporary and is replaced by this login.
+The backend verifies identity and enforces permissions. The UI is not the source of identity or authorization.
+
+Cookie sessions, eight-hour absolute expiry, 30-minute idle expiry, revocable sessions, CSRF, Origin checks, and the initial rate limits are implemented. Login admission counts in-flight attempts, and a failed activity timestamp does not turn an already-committed change into an error. The UI clears account-specific data when the session ends or the account changes, and it ignores a late response from the previous session. Password reset and deployment hosting remain unresolved. Claiming, the approval inbox, and admin screens are still planned, not built.
 
 ### Roles
 
@@ -57,7 +63,7 @@ Handler eligibility is a separate permission, not a role. Super Admin grants or 
 - **Assigned to me:** requests the viewer personally owns. This list is separate from the claimable queue.
 - Requests assigned to colleagues are on neither list.
 - A request that is waiting for approval stays visible to its submitter, to authorized approvers in the approval inbox, and to Super Admin.
-- Super Admin sees all requests.
+- Super Admin sees all requests in their own company. This inbox is still planned. The running rule is the temporary `canHandle` or submitter check, limited to that company. Another company’s requests are not visible.
 
 ### Claiming
 
@@ -99,7 +105,7 @@ Super Admin manages:
 
 - Employees, who submit requests and follow their own submissions. With handler eligibility, they also claim eligible work in their department.
 - Department Admins, who approve or deny requests for their department when approval is required. With handler eligibility, they may also claim in that same department, except their own submissions.
-- Super Admin, who sees every request, provisions accounts, and manages the configuration above. With handler eligibility, Super Admin may claim only in their own department, and never their own submissions.
+- Super Admin, who sees every request in their own company, invites accounts in that company, and manages the configuration above for that company only. With handler eligibility, Super Admin may claim only in their own department, and never their own submissions. A Super Admin has no access to another company.
 
 Department staff from the original problem (HR, IT, Finance) are accounts in these roles, not a separate kind of account.
 
@@ -107,7 +113,7 @@ Department staff from the original problem (HR, IT, Finance) are accounts in the
 
 - Employees
 - HR, IT, and Finance departments
-- Super Admin, for company-wide configuration
+- Super Admin, for configuration of their own company
 
 ## Functional Requirements
 
@@ -117,7 +123,7 @@ Department staff from the original problem (HR, IT, Finance) are accounts in the
 - Accounts with handler eligibility claim claimable unassigned requests in their department and update work status on requests they own.
 - Department Admins review a separate approval inbox when the captured rule requires approval. Pending-approval requests are not in the claimable queue.
 - A denial keeps the current work status, records Denied, and leaves that request unclaimable. A later submission is a new request.
-- Super Admin provisions accounts, including role and handler eligibility, and configures departments, request types, approval settings, and company details. There is no public registration.
+- A founder creates a company workspace and verifies their email before that workspace or Super Admin account is active. The Super Admin invites staff in that company, including role and handler eligibility. Invitees set their own passwords. There is no public employee signup. Super Admin configuration of request types, approval settings, and company details remains planned. Adding a department in the company is implemented so invitations have a department to join.
 - Deactivation blocks login and authenticated actions immediately. It is rejected while the account owns unfinished work.
 - Advisory intake remains advisory. Creating a request still goes through the normal submit path.
 
@@ -136,6 +142,10 @@ Numeric limits for response time, concurrency, and availability are still unknow
 Confirmed rules live in the requirements above. They are not repeated here.
 
 - IT, HR, and Finance are representative department names, not a rule that the company can have only those three. Rationale: the problem statement introduces them with "such as," and the Week 4 seed uses those names. Super Admin management of the department list is already a confirmed requirement.
+- Email verification lasts 24 hours, and an invitation lasts 7 days, until a product decision says otherwise. Rationale: the links need a concrete lifetime to be enforceable. Resend and cancellation are not built. See ADR-003.
+- One email belongs to one company. Rationale: the existing unique email column already identifies a single account, and multiple-company membership is unresolved.
+- Two companies may use the same name. Rationale: no uniqueness rule was confirmed, and the company id distinguishes workspaces.
+- Existing development rows belong to one company named Development. Rationale: the migration has to keep those rows without inventing a second workspace or a password.
 
 ## Constraints
 
@@ -146,10 +156,14 @@ Confirmed rules live in the requirements above. They are not repeated here.
 
 These are not decided. Implementation must not pick an answer silently.
 
+- Production email delivery. No provider is chosen, and no mailbox secret belongs in source or seed data. Until that decision exists, production signup and invitations fail before creating a company, account, verification, or invitation. Local development on `operations_hub` logs the link. Tests read tokens only in-process or from a test-only file, not from a public HTTP route.
+- Whether an invitation expires on a different schedule than the 7-day assumption, and whether it can be resent or cancelled.
+- Whether one person may belong to more than one company. This slice keeps a single company per email.
+- Whether company names must be unique. This slice allows duplicates.
 - Which fields are required to submit a request, including whether title and description are mandatory. Week 4 stores both as optional. That implementation does not decide the full-product rule.
 - Release and reassignment. Whether an owner can release a claim, whether another eligible person can take over, and whether Super Admin can move ownership are undecided. The effect on `IN_PROGRESS` work is undecided.
 - Password reset.
-- JWT and session design: lifetime, refresh, and logout.
+- Deployment hosting, including the production origin allowlist and cookie `SameSite` if the UI and API are served from different sites.
 - What "company details" contains.
 - Which attributes a request type has beyond its use in approval settings.
 - Whether some request fields are confidential beyond the visibility rules above, especially for HR or Finance.
@@ -164,7 +178,7 @@ Week 1 left authentication, visibility, approval, ownership assignment, and stat
 
 ## Acceptance Criteria
 
-These criteria describe the planned full product. Only the Week 4 subset is implemented today: create a request, show it to the submitter or a handler, assign an owner through the current API, and move `SUBMITTED → IN_PROGRESS → COMPLETED` with history. The claim, approval, login, and admin criteria are not implemented.
+These criteria describe the planned full product. The implemented subset is Week 4 request handling plus the first authentication slice: create a request, show it to the submitter or a handler, assign an owner through the current API, move `SUBMITTED → IN_PROGRESS → COMPLETED` with history, and sign in with email and password. The claim, approval, and admin-screen criteria are not implemented.
 
 ### Positive Cases
 
@@ -176,9 +190,9 @@ These criteria describe the planned full product. Only the Week 4 subset is impl
 - Resubmission creates a new request. The denied request and its decision remain.
 - The owner can move the request `SUBMITTED → IN_PROGRESS → COMPLETED`. Each successful change is saved and visible to the submitter.
 - Two eligible people claiming the same request produce one owner.
-- A Super Admin can provision accounts and manage departments, the one role on each account, handler eligibility, request types, approval settings, and company details. The first Super Admin comes from a one-time setup command.
+- A founder can create a company workspace and, after verifying their email, sign in as that company’s Super Admin. They can add a department and invite a staff account. The invitee sets a password and can then sign in. The first Super Admin does not come from a setup command. Request types, approval settings, company-details screens, and a full admin screen remain planned.
 - Changing an approval setting does not change the requirement already stored on existing requests.
-- A provisioned person who signs in with email and password receives a JWT, and later actions are authorized from that token.
+- A provisioned person who signs in with email and password can continue as that account. The session mechanism is implemented in ADR-002. Later actions use the account's current permissions from the database.
 - Deactivating an account that owns no unfinished request blocks later login and authenticated actions, keeps history, and blocks new claims.
 
 ### Negative / Failure Cases
@@ -187,7 +201,7 @@ These criteria describe the planned full product. Only the Week 4 subset is impl
 - A person cannot claim a request they submitted, a request outside their department, a request still waiting for approval, or a Denied request.
 - An account without handler eligibility cannot claim, including a Department Admin or Super Admin.
 - An account cannot hold a second role.
-- Public registration is rejected. Only Super Admin provisioning, or the one-time first-Super-Admin setup command, creates accounts.
+- Public employee signup is rejected. Company signup is the onboarding path. After a company is active, only that company’s Super Admin can invite accounts. Employee and Department Admin callers are denied. An invitation or verification link that is wrong, expired, or already used does not activate an account. A caller cannot read or change another company’s requests, history, employees, departments, or intake departments by sending that company’s ids. The retired setup command does not create a Super Admin.
 - The submitter cannot approve or deny their own request.
 - A denial without a reason is rejected, and no approval decision is stored.
 - Deactivation is rejected while the account owns a request that is not `COMPLETED`.

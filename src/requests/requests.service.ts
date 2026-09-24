@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Employee, RequestStatus as PrismaRequestStatus } from '@prisma/client';
+import { RequestStatus as PrismaRequestStatus } from '@prisma/client';
 import { AssignOwnerDto } from './dto/assign-owner.dto';
 import { CreateRequestDto } from './dto/create-request.dto';
 import { TransitionRequestDto } from './dto/transition-request.dto';
@@ -18,10 +18,12 @@ const ALLOWED_TRANSITIONS: Record<RequestStatus, RequestStatus[]> = {
   [RequestStatus.COMPLETED]: [],
 };
 
+const personSelect = { id: true, name: true } as const;
+
 const requestInclude = {
-  submitter: true,
+  submitter: { select: personSelect },
   department: true,
-  currentOwner: true,
+  currentOwner: { select: personSelect },
 } as const;
 
 @Injectable()
@@ -34,11 +36,12 @@ export class RequestsService {
       throw new ForbiddenException('You can only submit requests as yourself');
     }
 
-    await this.ensureEmployee(dto.submittedBy);
-    await this.ensureDepartment(dto.departmentId);
+    await this.ensureEmployee(dto.submittedBy, actor.companyId);
+    await this.ensureDepartment(dto.departmentId, actor.companyId);
 
     const request = await this.prisma.request.create({
       data: {
+        companyId: actor.companyId,
         submittedBy: dto.submittedBy,
         departmentId: dto.departmentId,
         currentOwnerId: null,
@@ -55,16 +58,17 @@ export class RequestsService {
 
   async findOne(actorId: number, id: number) {
     const actor = await this.requireActor(actorId);
-    const request = await this.getRequestOrThrow(id);
+    const request = await this.getRequestOrThrow(id, actor.companyId);
     this.assertCanView(actor, request);
     return this.toRequestResponse(request);
   }
 
   async getHistory(actorId: number, id: number) {
+    const actor = await this.requireActor(actorId);
     await this.findOne(actorId, id);
     const history = await this.prisma.requestStatusHistory.findMany({
-      where: { requestId: id },
-      include: { changedByEmployee: true },
+      where: { requestId: id, companyId: actor.companyId },
+      include: { changedByEmployee: { select: { id: true, name: true } } },
       orderBy: { id: 'asc' },
     });
     return history.map((record) => ({
@@ -85,8 +89,8 @@ export class RequestsService {
     const actor = await this.requireActor(actorId);
     this.assertCanHandle(actor);
 
-    const existing = await this.getRequestOrThrow(id);
-    const owner = await this.ensureEmployee(dto.currentOwnerId);
+    const existing = await this.getRequestOrThrow(id, actor.companyId);
+    const owner = await this.ensureEmployee(dto.currentOwnerId, actor.companyId);
     if (!owner.canHandle) {
       throw new ForbiddenException('The assigned owner must be allowed to handle requests');
     }
@@ -94,11 +98,14 @@ export class RequestsService {
       throw new ForbiddenException('The submitter cannot become the owner of their own request');
     }
 
-    const request = await this.prisma.request.update({
-      where: { id },
+    const updated = await this.prisma.request.updateMany({
+      where: { id, companyId: actor.companyId },
       data: { currentOwnerId: dto.currentOwnerId },
-      include: requestInclude,
     });
+    if (updated.count !== 1) {
+      throw new NotFoundException(`Request ${id} was not found`);
+    }
+    const request = await this.getRequestOrThrow(id, actor.companyId);
 
     return this.toRequestResponse(request);
   }
@@ -111,7 +118,7 @@ export class RequestsService {
       throw new ForbiddenException('changedBy must match the acting user');
     }
 
-    const request = await this.getRequestOrThrow(id);
+    const request = await this.getRequestOrThrow(id, actor.companyId);
 
     const currentStatus = request.status as RequestStatus;
     const allowedNext = ALLOWED_TRANSITIONS[currentStatus];
@@ -147,6 +154,7 @@ export class RequestsService {
       }),
       this.prisma.requestStatusHistory.create({
         data: {
+          companyId: actor.companyId,
           requestId: id,
           previousStatus,
           newStatus: dto.to as PrismaRequestStatus,
@@ -160,28 +168,31 @@ export class RequestsService {
   }
 
   private async requireActor(actorId: number) {
-    const actor = await this.prisma.employee.findUnique({ where: { id: actorId } });
+    const actor = await this.prisma.employee.findUnique({
+      where: { id: actorId },
+      select: { id: true, companyId: true, canHandle: true },
+    });
     if (!actor) {
       throw new BadRequestException(`Employee ${actorId} was not found`);
     }
     return actor;
   }
 
-  private assertCanHandle(actor: Employee) {
+  private assertCanHandle(actor: { canHandle: boolean }) {
     if (!actor.canHandle) {
       throw new ForbiddenException('You are not allowed to handle requests');
     }
   }
 
-  private assertCanView(actor: Employee, request: { submittedBy: number }) {
+  private assertCanView(actor: { id: number; canHandle: boolean }, request: { submittedBy: number }) {
     if (!actor.canHandle && request.submittedBy !== actor.id) {
       throw new ForbiddenException('You are not allowed to view this request');
     }
   }
 
-  private async getRequestOrThrow(id: number) {
-    const request = await this.prisma.request.findUnique({
-      where: { id },
+  private async getRequestOrThrow(id: number, companyId: number) {
+    const request = await this.prisma.request.findFirst({
+      where: { id, companyId },
       include: requestInclude,
     });
     if (!request) {
@@ -190,16 +201,21 @@ export class RequestsService {
     return request;
   }
 
-  private async ensureEmployee(id: number) {
-    const employee = await this.prisma.employee.findUnique({ where: { id } });
+  private async ensureEmployee(id: number, companyId: number) {
+    const employee = await this.prisma.employee.findFirst({
+      where: { id, companyId },
+      select: { id: true, canHandle: true },
+    });
     if (!employee) {
       throw new BadRequestException(`Employee ${id} was not found`);
     }
     return employee;
   }
 
-  private async ensureDepartment(id: number) {
-    const department = await this.prisma.department.findUnique({ where: { id } });
+  private async ensureDepartment(id: number, companyId: number) {
+    const department = await this.prisma.department.findFirst({
+      where: { id, companyId },
+    });
     if (!department) {
       throw new BadRequestException(`Department ${id} was not found`);
     }

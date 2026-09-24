@@ -1,17 +1,9 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Headers,
-  Param,
-  ParseIntPipe,
-  Patch,
-  Post,
-} from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Req } from '@nestjs/common';
+import { RecordsActivity } from '../auth/auth.decorators';
+import { AuthenticatedRequest } from '../auth/session.guard';
 import { AssignOwnerDto } from './dto/assign-owner.dto';
 import { CreateRequestDto } from './dto/create-request.dto';
 import { TransitionRequestDto } from './dto/transition-request.dto';
-import { parseActorId } from './parse-actor-id';
 import { RequestsService } from './requests.service';
 
 @Controller('requests')
@@ -19,44 +11,40 @@ export class RequestsController {
   constructor(private readonly requestsService: RequestsService) {}
 
   @Post()
-  create(
-    @Headers('x-actor-id') actorHeader: string | undefined,
-    @Body() dto: CreateRequestDto,
-  ) {
-    return this.requestsService.create(parseActorId(actorHeader), dto);
+  @RecordsActivity()
+  create(@Req() request: AuthenticatedRequest, @Body() dto: CreateRequestDto) {
+    return this.requestsService.create(request.auth!.id, dto);
   }
 
   @Get(':id/history')
-  getHistory(
-    @Headers('x-actor-id') actorHeader: string | undefined,
-    @Param('id', ParseIntPipe) id: number,
-  ) {
-    return this.requestsService.getHistory(parseActorId(actorHeader), id);
+  @RecordsActivity()
+  getHistory(@Req() request: AuthenticatedRequest, @Param('id', ParseIntPipe) id: number) {
+    return this.requestsService.getHistory(request.auth!.id, id);
   }
 
   @Get(':id')
-  findOne(
-    @Headers('x-actor-id') actorHeader: string | undefined,
-    @Param('id', ParseIntPipe) id: number,
-  ) {
-    return this.requestsService.findOne(parseActorId(actorHeader), id);
+  @RecordsActivity()
+  findOne(@Req() request: AuthenticatedRequest, @Param('id', ParseIntPipe) id: number) {
+    return this.requestsService.findOne(request.auth!.id, id);
   }
 
   @Patch(':id/owner')
+  @RecordsActivity()
   assignOwner(
-    @Headers('x-actor-id') actorHeader: string | undefined,
+    @Req() request: AuthenticatedRequest,
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: AssignOwnerDto,
   ) {
-    return this.requestsService.assignOwner(parseActorId(actorHeader), id, dto);
+    return this.requestsService.assignOwner(request.auth!.id, id, dto);
   }
 
   @Patch(':id/transition')
+  @RecordsActivity()
   transition(
-    @Headers('x-actor-id') actorHeader: string | undefined,
+    @Req() request: AuthenticatedRequest,
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: TransitionRequestDto,
   ) {
-    return this.requestsService.transition(parseActorId(actorHeader), id, dto);
+    return this.requestsService.transition(request.auth!.id, id, dto);
   }
 }

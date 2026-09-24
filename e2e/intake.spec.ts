@@ -1,8 +1,10 @@
 import { expect, test } from '@playwright/test';
-import { cleanRequestData } from './db';
+import { cleanRequestData, ensureTestLogins } from './db';
+import { login } from './login';
 
 test.describe('Request intake', () => {
   test.beforeEach(async () => {
+    await ensureTestLogins();
     await cleanRequestData();
   });
 
@@ -13,7 +15,7 @@ test.describe('Request intake', () => {
   test('thin input asks for more detail and does not offer Prepare a request', async ({
     page,
   }) => {
-    await page.goto('/');
+    await login(page, 'john@operations-hub.test');
 
     await page.getByLabel('What do you need?').fill('I need help.');
     await page.getByRole('button', { name: 'Analyze' }).click();
@@ -50,7 +52,7 @@ test.describe('Request intake', () => {
   });
 
   test('clear need still offers to prepare a request', async ({ page }) => {
-    await page.goto('/');
+    await login(page, 'john@operations-hub.test');
 
     await page.getByLabel('What do you need?').fill('I need a laptop.');
     await page.getByRole('button', { name: 'Analyze' }).click();
@@ -68,7 +70,7 @@ test.describe('Request intake', () => {
   });
 
   test('failed re-analyze does not keep the previous AI result', async ({ page }) => {
-    await page.goto('/');
+    await login(page, 'john@operations-hub.test');
 
     await page.getByLabel('What do you need?').fill('I need a laptop.');
     await page.getByRole('button', { name: 'Analyze' }).click();

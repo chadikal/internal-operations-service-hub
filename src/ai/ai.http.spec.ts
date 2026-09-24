@@ -2,7 +2,7 @@ import * as request from 'supertest';
 import { RequestyAiProvider } from './requesty-ai.provider';
 import { PrismaService } from '../prisma/prisma.service';
 import {
-  asActor,
+  authHeaders,
   cleanRequestData,
   closeTestApp,
   createTestApp,
@@ -25,7 +25,7 @@ describe('AI intake HTTP boundary', () => {
 
       const response = await request(app.getHttpServer())
         .post('/ai/intake')
-        .set(asActor(JOHN))
+        .set(await authHeaders(app, prisma, JOHN))
         .send({ text: 'I need a laptop.' });
 
       expect(response.status).toBe(200);
@@ -54,7 +54,7 @@ describe('AI intake HTTP boundary', () => {
 
       const response = await request(app.getHttpServer())
         .post('/ai/intake')
-        .set(asActor(JOHN))
+        .set(await authHeaders(app, prisma, JOHN))
         .send({ text: 'I need a laptop.' });
 
       expect(response.status).toBe(502);
@@ -77,7 +77,7 @@ describe('AI intake HTTP boundary', () => {
 
       const response = await request(app.getHttpServer())
         .post('/ai/intake')
-        .set(asActor(JOHN))
+        .set(await authHeaders(app, prisma, JOHN))
         .send({ text: 'I need a laptop.' });
 
       expect(response.status).toBe(503);
@@ -89,29 +89,22 @@ describe('AI intake HTTP boundary', () => {
     }
   });
 
-  it('rejects missing, invalid, and unknown actors', async () => {
+  it('rejects a missing session and ignores a forged actor header', async () => {
     const { app, prisma } = await createTestApp();
     try {
       const missing = await request(app.getHttpServer())
         .post('/ai/intake')
         .send({ text: 'I need a laptop.' });
-      expect(missing.status).toBe(400);
-      expect(missing.body.message).toMatch(/X-Actor-Id header is required/);
+      expect(missing.status).toBe(401);
+      expect(missing.body.message).toMatch(/Authentication is required/);
 
-      const invalid = await request(app.getHttpServer())
+      const forged = await request(app.getHttpServer())
         .post('/ai/intake')
-        .set({ 'X-Actor-Id': 'abc' })
+        .set(await authHeaders(app, prisma, JOHN))
+        .set('X-Actor-Id', '999999')
         .send({ text: 'I need a laptop.' });
-      expect(invalid.status).toBe(400);
-      expect(invalid.body.message).toMatch(/positive integer/);
-
-      const unknown = await request(app.getHttpServer())
-        .post('/ai/intake')
-        .set({ 'X-Actor-Id': '999999' })
-        .send({ text: 'I need a laptop.' });
-      expect(unknown.status).toBe(400);
-      expect(unknown.body.message).toMatch(/Employee 999999 was not found/);
-
+      expect(forged.status).toBe(200);
+      expect(forged.body.draft.departmentId).toBe(1);
       expect(await countAuthoritativeRows(prisma)).toEqual({ requests: 0, history: 0 });
     } finally {
       await closeTestApp(app);
@@ -126,7 +119,7 @@ describe('AI intake HTTP boundary', () => {
       await cleanRequestData(prisma);
       const response = await request(app.getHttpServer())
         .post('/ai/intake')
-        .set(asActor(JOHN))
+        .set(await authHeaders(app, prisma, JOHN))
         .send({ text: 'I need a laptop.' });
 
       expect(response.status).toBe(200);
@@ -155,7 +148,7 @@ describe('AI intake HTTP boundary', () => {
       await cleanRequestData(prisma);
       const response = await request(app.getHttpServer())
         .post('/ai/intake')
-        .set(asActor(JOHN))
+        .set(await authHeaders(app, prisma, JOHN))
         .send({ text: 'I need a laptop.' });
 
       expect(response.status).toBe(503);

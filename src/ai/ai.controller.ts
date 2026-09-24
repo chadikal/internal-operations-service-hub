@@ -1,5 +1,6 @@
-import { Body, Controller, Headers, HttpCode, Post } from '@nestjs/common';
-import { parseActorId } from '../requests/parse-actor-id';
+import { Body, Controller, HttpCode, Post, Req } from '@nestjs/common';
+import { RecordsActivity } from '../auth/auth.decorators';
+import { AuthenticatedRequest } from '../auth/session.guard';
 import { AiService } from './ai.service';
 import { AnalyzeIntakeDto } from './dto/analyze-intake.dto';
 
@@ -9,10 +10,8 @@ export class AiController {
 
   @Post('intake')
   @HttpCode(200)
-  analyze(
-    @Headers('x-actor-id') actorHeader: string | undefined,
-    @Body() dto: AnalyzeIntakeDto,
-  ) {
-    return this.aiService.analyze(parseActorId(actorHeader), dto.text);
+  @RecordsActivity()
+  analyze(@Req() request: AuthenticatedRequest, @Body() dto: AnalyzeIntakeDto) {
+    return this.aiService.analyze(request.auth!.id, dto.text);
   }
 }

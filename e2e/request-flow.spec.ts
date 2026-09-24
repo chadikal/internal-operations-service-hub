@@ -1,8 +1,10 @@
 import { expect, test } from '@playwright/test';
-import { cleanRequestData } from './db';
+import { cleanRequestData, ensureTestLogins } from './db';
+import { login } from './login';
 
 test.describe('Service request user journey', () => {
   test.beforeEach(async () => {
+    await ensureTestLogins();
     await cleanRequestData();
   });
 
@@ -11,12 +13,9 @@ test.describe('Service request user journey', () => {
   });
 
   test('John creates a request and Chadi starts it', async ({ page }) => {
-    await page.goto('/');
+    await login(page, 'john@operations-hub.test');
+    await expect(page.getByTestId('signed-in-name')).toContainText('John');
 
-    await expect(page.getByRole('button', { name: 'John' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Chadi' })).toBeVisible();
-
-    await page.getByRole('button', { name: 'John' }).click();
     await page.getByLabel('Department').selectOption({ label: 'IT' });
     await page.getByRole('button', { name: 'Create Request' }).click();
 
@@ -25,7 +24,10 @@ test.describe('Service request user journey', () => {
     const requestId = requestIdText.replace('#', '').trim();
     expect(requestId).toMatch(/^\d+$/);
 
-    await page.getByRole('button', { name: 'Chadi' }).click();
+    await page.getByRole('button', { name: 'Log out' }).click();
+    await expect(page.getByRole('heading', { name: 'Log in' })).toBeVisible();
+    await login(page, 'chadi@operations-hub.test');
+    await expect(page.getByTestId('signed-in-name')).toContainText('Chadi');
     await expect(page.getByTestId('request-status')).toHaveCount(0);
 
     await page.getByLabel('Request ID').fill(requestId);

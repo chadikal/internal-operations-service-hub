@@ -2,7 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import * as request from 'supertest';
 import { PrismaService } from '../prisma/prisma.service';
 import {
-  asActor,
+  authHeaders,
   CHADI,
   cleanRequestData,
   closeTestApp,
@@ -34,20 +34,20 @@ describe('Request lifecycle safety', () => {
   it('rejects SUBMITTED to COMPLETED with 409 and does not write history', async () => {
     const created = await request(app.getHttpServer())
       .post('/requests')
-      .set(asActor(JOHN))
+      .set(await authHeaders(app, prisma, JOHN))
       .send({ submittedBy: JOHN, departmentId: IT });
     expect(created.status).toBe(201);
     const id = created.body.id as number;
 
     const owned = await request(app.getHttpServer())
       .patch(`/requests/${id}/owner`)
-      .set(asActor(CHADI))
+      .set(await authHeaders(app, prisma, CHADI))
       .send({ currentOwnerId: CHADI });
     expect(owned.status).toBe(200);
 
     const skipped = await request(app.getHttpServer())
       .patch(`/requests/${id}/transition`)
-      .set(asActor(CHADI))
+      .set(await authHeaders(app, prisma, CHADI))
       .send({ to: 'COMPLETED', changedBy: CHADI });
     expect(skipped.status).toBe(409);
 
@@ -67,7 +67,7 @@ describe('Request lifecycle safety', () => {
 
     const missing = await request(app.getHttpServer())
       .get(`/requests/${missingId}`)
-      .set(asActor(CHADI));
+      .set(await authHeaders(app, prisma, CHADI));
     expect(missing.status).toBe(404);
     expect(missing.body.message).toMatch(new RegExp(`Request ${missingId} was not found`));
   });
@@ -75,26 +75,26 @@ describe('Request lifecycle safety', () => {
   it('still persists SUBMITTED to IN_PROGRESS to COMPLETED with two history rows', async () => {
     const created = await request(app.getHttpServer())
       .post('/requests')
-      .set(asActor(JOHN))
+      .set(await authHeaders(app, prisma, JOHN))
       .send({ submittedBy: JOHN, departmentId: IT });
     expect(created.status).toBe(201);
     const id = created.body.id as number;
 
     const owned = await request(app.getHttpServer())
       .patch(`/requests/${id}/owner`)
-      .set(asActor(CHADI))
+      .set(await authHeaders(app, prisma, CHADI))
       .send({ currentOwnerId: CHADI });
     expect(owned.status).toBe(200);
 
     const started = await request(app.getHttpServer())
       .patch(`/requests/${id}/transition`)
-      .set(asActor(CHADI))
+      .set(await authHeaders(app, prisma, CHADI))
       .send({ to: 'IN_PROGRESS', changedBy: CHADI });
     expect(started.status).toBe(200);
 
     const completed = await request(app.getHttpServer())
       .patch(`/requests/${id}/transition`)
-      .set(asActor(CHADI))
+      .set(await authHeaders(app, prisma, CHADI))
       .send({ to: 'COMPLETED', changedBy: CHADI });
     expect(completed.status).toBe(200);
 

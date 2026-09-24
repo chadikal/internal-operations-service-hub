@@ -2,7 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import * as request from 'supertest';
 import { PrismaService } from '../prisma/prisma.service';
 import {
-  asActor,
+  authHeaders,
   CHADI,
   cleanRequestData,
   closeTestApp,
@@ -34,20 +34,20 @@ describe('Request persistence', () => {
   it('persists SUBMITTED to IN_PROGRESS and one history row in PostgreSQL', async () => {
     const created = await request(app.getHttpServer())
       .post('/requests')
-      .set(asActor(JOHN))
+      .set(await authHeaders(app, prisma, JOHN))
       .send({ submittedBy: JOHN, departmentId: IT });
     expect(created.status).toBe(201);
     const id = created.body.id as number;
 
     const owned = await request(app.getHttpServer())
       .patch(`/requests/${id}/owner`)
-      .set(asActor(CHADI))
+      .set(await authHeaders(app, prisma, CHADI))
       .send({ currentOwnerId: CHADI });
     expect(owned.status).toBe(200);
 
     const started = await request(app.getHttpServer())
       .patch(`/requests/${id}/transition`)
-      .set(asActor(CHADI))
+      .set(await authHeaders(app, prisma, CHADI))
       .send({ to: 'IN_PROGRESS', changedBy: CHADI });
     expect(started.status).toBe(200);
 
@@ -72,7 +72,7 @@ describe('Request persistence', () => {
   it('stores optional title and description and keeps omitted fields null', async () => {
     const withText = await request(app.getHttpServer())
       .post('/requests')
-      .set(asActor(JOHN))
+      .set(await authHeaders(app, prisma, JOHN))
       .send({
         submittedBy: JOHN,
         departmentId: IT,
@@ -91,7 +91,7 @@ describe('Request persistence', () => {
 
     const omitted = await request(app.getHttpServer())
       .post('/requests')
-      .set(asActor(JOHN))
+      .set(await authHeaders(app, prisma, JOHN))
       .send({ submittedBy: JOHN, departmentId: IT });
     expect(omitted.status).toBe(201);
     expect(omitted.body.title).toBeNull();

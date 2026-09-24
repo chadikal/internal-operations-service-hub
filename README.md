@@ -8,11 +8,11 @@ The project aims to replace scattered request channels with one system where emp
 
 ## Current Stage
 
-Week 4 / v0.4 is the current slice: the Week 3 React + NestJS + PostgreSQL app plus advisory Request Intake.
+The current slice is the Week 4 React + NestJS + PostgreSQL app, advisory Request Intake, email/password sessions, and company signup.
 
-An employee can describe a need in free text. The API analyzes it with Requesty at runtime (`AI_PROVIDER=requesty`) and returns troubleshooting and/or a draft. Intake never creates a request; the employee reviews the draft and submits through the existing Create Request path. Automated tests and evals use `MockAiProvider`.
+An employee signs in with email and password, then describes a need in free text. The API analyzes it with Requesty at runtime (`AI_PROVIDER=requesty`) and returns troubleshooting and/or a draft. Intake never creates a request; the employee reviews the draft and submits through Create Request. Automated tests and evals use `MockAiProvider`.
 
-This is not the full application. There is no real authentication. `X-Actor-Id` is a temporary demo stand-in. Approvals, account administration, and department administration are not implemented in this slice. Confirmed plans for that later work are in [Planned full product](#planned-full-product-not-implemented).
+This is not the full application. Approvals, claiming, account administration screens, and a full department-administration screen are not implemented. A company Super Admin can add a department and invite staff. Confirmed plans for the later work are in [Planned full product](#planned-full-product-not-implemented).
 
 Stack:
 
@@ -23,17 +23,17 @@ React/Vite UI (localhost:5173)
       → PostgreSQL
 ```
 
-Temporary actor identity: header `X-Actor-Id`. The UI has `Acting as: Chadi | John`.
+Identity is an `HttpOnly` cookie named `hub_session`. The UI has Log in, Log out, and Create a company workspace. There is no public employee signup. Protected calls send `X-CSRF-Token`. `X-Actor-Id` is ignored. Each account belongs to one company, and the API will not return another company’s data.
 
-Lifecycle for this slice: `SUBMITTED → IN_PROGRESS → COMPLETED`. `COMPLETED` is terminal. A current owner is required before a transition.
+Lifecycle for this slice: `SUBMITTED → IN_PROGRESS → COMPLETED`. `COMPLETED` is terminal. A current owner is required before a transition. Assign and transition still require `canHandle`.
 
-Seeded actors: Chadi (`id=1`, IT, `canHandle=true`), John (`id=2`, IT, `canHandle=false`). Department `1` is IT.
+Seeded people: Chadi (`id=1`, IT, `canHandle=true`), John (`id=2`, IT, `canHandle=false`). Department `1` is IT. The company migration attaches existing rows to one Development company and does not invent a password. After that migration their emails and password hashes are still empty, so they cannot log in until credentials are set with the development command below.
 
 ## Planned full product (not implemented)
 
-`docs/product-spec.md` is the source for confirmed future requirements. In short: email/password sign-in with JWT and no public registration; Super Admin provisions accounts, and the first Super Admin comes from a one-time setup command; each account has one role, Employee, Department Admin, or Super Admin; handler eligibility is a separate permission; people see their own submissions; the claimable queue is eligible unassigned requests in their department, and Assigned to me is the separate list of requests they personally own; colleagues' assigned requests appear on neither list; Super Admin sees all; eligible people claim from the claimable queue, only in their department, never their own submissions, and concurrent claims leave one owner; approval is configurable per department and request type and is captured on the request. A request that requires approval becomes claimable only after approval. Denial keeps the work status, sets approval state to Denied, and never unlocks claiming. Resubmission creates a new request. Deactivation immediately blocks login and new claims, and is rejected while the account owns unfinished work. Work status stays `SUBMITTED → IN_PROGRESS → COMPLETED`.
+`docs/product-spec.md` is the source for confirmed future requirements. Login, revocable sessions, company signup, company-scoped invitations, one role per account, and separate handler eligibility are implemented and described in `docs/decisions/ADR-002-authentication.md` and `docs/decisions/ADR-003-company-signup.md`. Request visibility in this slice is still the temporary `canHandle` rule, limited to the caller’s company. Still planned: people see their own submissions under the full visibility rules; the claimable queue is eligible unassigned requests in their department, and Assigned to me is the separate list of requests they personally own; colleagues' assigned requests appear on neither list; Super Admin sees all requests in their own company; eligible people claim from the claimable queue, only in their department, never their own submissions, and concurrent claims leave one owner; approval is configurable per department and request type and is captured on the request. A request that requires approval becomes claimable only after approval. Denial keeps the work status, sets approval state to Denied, and never unlocks claiming. Resubmission creates a new request. Deactivation immediately blocks login and new claims, and is rejected while the account owns unfinished work. Login already rejects a deactivated account. The unfinished-work check and claim blocking are not implemented. Work status stays `SUBMITTED → IN_PROGRESS → COMPLETED`.
 
-Release and reassignment, password reset, and JWT/session design are still open. Do not treat them as decided.
+Release and reassignment, password reset, production email delivery, and deployment hosting are still open. Do not treat them as decided.
 
 ## Development workflow
 
@@ -60,24 +60,44 @@ cd ..
 
 ## Development database
 
-Create a database named `operations_hub`. Copy `.env.example` to `.env` and set `DATABASE_URL`:
+Create a database named `operations_hub`. Copy `.env.example` to `.env` and set `DATABASE_URL` and a generated `JWT_SECRET`. Do not commit the secret.
 
 ```env
 DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@localhost:5432/operations_hub"
+JWT_SECRET=
+AUTH_ORIGINS=http://localhost:5173
 AI_PROVIDER=requesty
 REQUESTY_MODEL=nemotron-3.5-lightning-30b-a3b
 REQUESTY_API_KEY=
 ```
 
+Generate the secret in a shell and put it only in `.env`:
+
+```powershell
+node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+```
+
 If the password contains `#`, `@`, or `%`, URL-encode those characters (`#` → `%23`).
 
-`REQUESTY_API_KEY` is used only by the NestJS API. Do not put it in frontend env files. Automated tests ignore Requesty and force `AI_PROVIDER=mock`.
+`REQUESTY_API_KEY` is used only by the NestJS API. Do not put it in frontend env files. Automated tests ignore Requesty and force `AI_PROVIDER=mock`. They also set their own test-only `JWT_SECRET`.
 
-Apply migrations and seed once. Nest does not seed on start.
+Apply migrations on `operations_hub`. This does not reset the database. Nest does not seed on start, and seed does not set passwords.
 
 ```powershell
 npx prisma migrate deploy
 npx prisma db seed
+```
+
+Create a company from the sign-in page: company name, your name, email, and a password of at least 12 characters. Verify the email before the workspace is active. On the development database, with `NODE_ENV=development`, the API logs that verification link. It does not log it for tests or production, and the signup response does not include the token. Production has no mail provider, so signup and invitations fail there and create no records. That is not production onboarding.
+
+`npm run auth:create-super-admin` no longer creates an account.
+
+To let an existing employee such as John sign in on the development database, pass an email only when that row does not have one yet. The command refuses to replace an existing email or password hash. It runs only when `NODE_ENV` is `development` and `DATABASE_URL` names `operations_hub`.
+
+```powershell
+$env:NODE_ENV="development"
+$env:DEV_ACCOUNT_PASSWORD="choose-a-password-at-least-12"
+npm run auth:set-dev-password -- 2 john@example.com
 ```
 
 ## Start the API
@@ -101,7 +121,7 @@ The UI listens on `http://localhost:5173`.
 
 ## Request Intake
 
-1. Open `http://localhost:5173` and select an actor.
+1. Open `http://localhost:5173` and log in.
 2. In **Request Intake**, describe what you need and click **Analyze**. Nothing is submitted.
 3. A **problem** shows up to 3 troubleshooting steps first. A **need** skips that and offers to prepare a request.
 4. Optional missing details may appear even when a draft is ready; they do not block **Prepare a request**.
@@ -112,9 +132,9 @@ Thin input such as “I need help.” stays on the form with no draft.
 ## Exercise the flow
 
 1. Open `http://localhost:5173`.
-2. Select **John**.
+2. Log in as **John**.
 3. Create a request to **IT** (title and description are optional). Note the request ID. Status is **SUBMITTED**.
-4. Select **Chadi**. The loaded request clears.
+4. Log out, then log in as **Chadi**. The loaded request clears.
 5. Enter the ID under **Request ID** and click **Load Request**.
 6. Assign **Chadi** as owner.
 7. Click **Start Request**. Status becomes **IN PROGRESS**. History shows `SUBMITTED → IN PROGRESS` by Chadi.
@@ -126,20 +146,29 @@ John can view his own request. John cannot view Chadi's request (**403**). Chadi
 
 ## Endpoints
 
-Request routes and `POST /ai/intake` require `X-Actor-Id`. `GET /employees` and `GET /departments` do not.
+Request routes, `POST /ai/intake`, `GET /employees`, and `GET /departments` require a session cookie. State-changing calls also require `X-CSRF-Token`. `GET /health` is public.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/requests` | Create. Always `SUBMITTED`. Body: `{ "submittedBy": 2, "departmentId": 1 }` plus optional `title` and `description`. `submittedBy` must match `X-Actor-Id`. |
-| GET | `/requests/:id` | Fetch a request the actor may view. |
+| POST | `/auth/login` | Body: `{ "email", "password" }`. Requires a trusted `Origin`. Sets `hub_session`. |
+| POST | `/auth/logout` | Revokes the session and clears the cookie. Requires `X-CSRF-Token`. |
+| GET | `/auth/me` | Current account, company, and CSRF token. Does not extend the idle timer. |
+| POST | `/auth/signup` | Public, with a trusted `Origin`. Body: `{ "companyName", "name", "email", "password" }`. Creates a pending company and inactive Super Admin. Does not return a token or set a session. |
+| POST | `/auth/verify-email` | Public, with a trusted `Origin`. Body: `{ "token" }`. Activates that company and Super Admin. |
+| POST | `/auth/invitations` | Company Super Admin only. Body has email, name, departmentId, role, and canHandle. Does not accept a password. |
+| POST | `/auth/invitations/accept` | Public, with a trusted `Origin`. Body: `{ "token", "password" }`. The invitee sets the password. |
+| POST | `/departments` | Company Super Admin only. Body: `{ "name" }`. |
+| GET | `/health` | `{ "ok": true }`. |
+| POST | `/requests` | Create. Always `SUBMITTED`. Body: `{ "submittedBy": 2, "departmentId": 1 }` plus optional `title` and `description`. `submittedBy` must match the signed-in account. |
+| GET | `/requests/:id` | Fetch a request the account may view. |
 | PATCH | `/requests/:id/owner` | Assign owner. Body: `{ "currentOwnerId": 1 }`. Handler only. Owner must have `canHandle` and must not be the submitter. |
-| PATCH | `/requests/:id/transition` | Body: `{ "to": "IN_PROGRESS", "changedBy": 1 }`. `changedBy` must match `X-Actor-Id` and the current owner. |
-| GET | `/requests/:id/history` | Successful status history the actor may view. |
+| PATCH | `/requests/:id/transition` | Body: `{ "to": "IN_PROGRESS", "changedBy": 1 }`. `changedBy` must match the signed-in account and the current owner. |
+| GET | `/requests/:id/history` | Successful status history the account may view. |
 | POST | `/ai/intake` | Advisory analyze. Body: `{ "text": "I need a laptop." }`. Does not create a request. |
-| GET | `/employees` | Seeded employees for the UI. |
-| GET | `/departments` | Seeded departments for the UI. |
+| GET | `/employees` | Employees for the UI: id, name, departmentId, canHandle. |
+| GET | `/departments` | Departments for the UI. |
 
-Visibility: `canView = actor.canHandle || request.submittedBy === actor.id`. Handler actions require `canHandle`. Unauthorized → **403**. Illegal lifecycle edge by an authorized handler → **409**, no history write. Missing request → **404**.
+Visibility inside the caller’s company: `canView = actor.canHandle || request.submittedBy === actor.id`. A request, employee, or department from another company is treated as missing. Handler actions require `canHandle`. Unauthorized in the same company → **403**. Illegal lifecycle edge by an authorized handler → **409**, no history write. Missing request → **404**.
 
 Responses include nested `submitter`, `department`, and `currentOwner` names.
 
@@ -178,7 +207,7 @@ Backend production build (Nest → `dist/`, entry `dist/main.js`). Does not call
 npm run build
 ```
 
-Browser E2E (Playwright, 4 tests: 1 request-flow + 3 intake). Google Chrome must be installed. Playwright uses `channel: 'chrome'`, not bundled Chromium. Stop anything already listening on ports 3000 or 5173.
+Browser E2E (Playwright, 6 tests: 2 login, 1 request-flow, 3 intake). Google Chrome must be installed. Playwright uses `channel: 'chrome'`, not bundled Chromium. Stop anything already listening on ports 3000 or 5173. The API process is started with a test-only `JWT_SECRET` and `operations_hub_test`.
 
 ```powershell
 npm run test:e2e
@@ -186,12 +215,15 @@ npm run test:e2e
 
 `npm test` and `npm run test:e2e` refuse to start unless `.env.test` points at the exact database name `operations_hub_test`.
 
+Checked on 22 September 2026. `npm run test:db:setup` had already applied `20260922160000_add_authentication` to `operations_hub_test` only. This pass did not migrate `operations_hub` and did not change its credentials. `npm test` passed 10 suites and 58 tests, `npm run eval:ai` passed 8 evals, `npm run build` passed, `cd frontend; npm run build` passed, and `npm run test:e2e` passed 6 tests. A later pass the same day re-ran `npx jest src/auth/auth.spec.ts src/auth/migration-preservation.spec.ts --testTimeout=60000` (2 suites, 22 tests, all passed) and `npm run build` (passed) after the scratch-database guard and strict login credential checks. That pass did not re-run the full suite, evals, frontend build, or Playwright, and it did not change `operations_hub`. A following pass re-ran `npx jest src/auth/migration-preservation.spec.ts --testTimeout=60000` (1 suite, 6 tests, all passed) and `npm run build` (passed) after closing a scratch client whose connection failed. That pass did not re-run the auth spec, full suite, evals, frontend build, or Playwright, and it did not change `operations_hub`.
+
 ## Documentation
 
-- `docs/product-spec.md` — problem, implemented Week 4 behavior, confirmed full-product requirements, and remaining decisions
-- `docs/architecture.md` — Week 1 architecture record plus proposed full-product changes
-- `docs/data-model.md` — Week 1 conceptual model, Week 4 schema notes, and proposed additions
+- `docs/product-spec.md` — problem, implemented request and authentication behavior, confirmed full-product requirements, and remaining decisions
+- `docs/architecture.md` — Week 1 architecture record plus later product changes
+- `docs/data-model.md` — Week 1 conceptual model, current schema notes, and later additions
 - `docs/decisions/ADR-001.md` — synchronous request submission
+- `docs/decisions/ADR-002-authentication.md` — implemented email/password sessions
 - `docs/week2-agentic-workflow.md` — Week 2 in-memory lifecycle notes
 - `docs/week3-agentic-workflow.md` — Week 3 implementation notes
 - `docs/week3-full-stack-delivery.md` — Week 3 delivered slice, API, tests, and evidence
@@ -203,4 +235,4 @@ Week 1 left exact statuses, ownership, and authentication unknown. Week 2 implem
 
 Those in-memory IDs and PowerShell cases are **not** the current system. Current evidence is the UI flow above plus `npm test` and `npm run test:e2e`.
 
-Authentication, approvals, and administration are specified as planned work in `docs/product-spec.md`. They are not implemented. Open decisions, including confidentiality beyond the visibility rules, stay in that file.
+Authentication for this branch is implemented in ADR-002. Approvals, claiming, and administration screens are specified as planned work in `docs/product-spec.md`. They are not implemented. Open decisions, including confidentiality beyond the visibility rules, stay in that file.

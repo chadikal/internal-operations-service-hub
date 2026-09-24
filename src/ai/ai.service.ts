@@ -18,9 +18,10 @@ export class AiService {
   ) {}
 
   async analyze(actorId: number, text: string): Promise<IntakeResult> {
-    await this.requireActor(actorId);
+    const actor = await this.requireActor(actorId);
 
     const departments = await this.prisma.department.findMany({
+      where: { companyId: actor.companyId },
       select: { id: true, name: true },
       orderBy: { id: 'asc' },
     });
@@ -52,7 +53,10 @@ export class AiService {
   }
 
   private async requireActor(actorId: number) {
-    const actor = await this.prisma.employee.findUnique({ where: { id: actorId } });
+    const actor = await this.prisma.employee.findUnique({
+      where: { id: actorId },
+      select: { id: true, companyId: true },
+    });
     if (!actor) {
       throw new BadRequestException(`Employee ${actorId} was not found`);
     }

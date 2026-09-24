@@ -13,26 +13,83 @@ enum RequestStatus {
   COMPLETED
 }
 
+enum AccountRole {
+  EMPLOYEE
+  DEPARTMENT_ADMIN
+  SUPER_ADMIN
+}
+
+enum CompanyStatus {
+  PENDING
+  ACTIVE
+}
+
+model Company {
+  id                 Int                 @id @default(autoincrement())
+  name               String
+  status             CompanyStatus       @default(PENDING)
+  createdAt          DateTime            @default(now())
+  departments        Department[]
+  employees          Employee[]
+  requests           Request[]
+  statusHistory      RequestStatusHistory[]
+  sessions           Session[]
+  emailVerifications EmailVerification[]
+  invitations        Invitation[]
+}
+
 model Department {
   id        Int        @id @default(autoincrement())
   name      String
+  companyId Int
+  company   Company    @relation(fields: [companyId], references: [id])
   employees Employee[]
   requests  Request[]
+
+  @@index([companyId])
 }
 
 model Employee {
-  id                Int                    @id @default(autoincrement())
-  name              String
-  departmentId      Int
-  canHandle         Boolean                @default(false)
-  department        Department             @relation(fields: [departmentId], references: [id])
-  submittedRequests Request[]              @relation("RequestSubmitter")
-  ownedRequests     Request[]              @relation("RequestOwner")
-  statusChanges     RequestStatusHistory[]
+  id                 Int                 @id @default(autoincrement())
+  name               String
+  companyId          Int
+  departmentId       Int?
+  canHandle          Boolean             @default(false)
+  email              String?             @unique
+  passwordHash       String?
+  role               AccountRole         @default(EMPLOYEE)
+  active             Boolean             @default(true)
+  company            Company             @relation(fields: [companyId], references: [id])
+  department         Department?         @relation(fields: [departmentId], references: [id])
+  submittedRequests  Request[]           @relation("RequestSubmitter")
+  ownedRequests      Request[]           @relation("RequestOwner")
+  statusChanges      RequestStatusHistory[]
+  sessions           Session[]
+  emailVerifications EmailVerification[]
+  invitation         Invitation?         @relation("InvitedAccount")
+  sentInvitations    Invitation[]        @relation("InvitedBy")
+
+  @@index([companyId])
+}
+
+model Session {
+  id                String    @id
+  accountId         Int
+  companyId         Int
+  csrfToken         String
+  createdAt         DateTime  @default(now())
+  lastActivityAt    DateTime
+  absoluteExpiresAt DateTime
+  revokedAt         DateTime?
+  account           Employee  @relation(fields: [accountId], references: [id])
+  company           Company   @relation(fields: [companyId], references: [id])
+
+  @@index([companyId])
 }
 
 model Request {
   id              Int                    @id @default(autoincrement())
+  companyId       Int
   submittedBy     Int
   departmentId    Int
   currentOwnerId  Int?
@@ -40,19 +97,55 @@ model Request {
   statusUpdatedAt DateTime
   title           String?
   description     String?
+  company         Company                @relation(fields: [companyId], references: [id])
   submitter       Employee               @relation("RequestSubmitter", fields: [submittedBy], references: [id])
   department      Department             @relation(fields: [departmentId], references: [id])
   currentOwner    Employee?              @relation("RequestOwner", fields: [currentOwnerId], references: [id])
   history         RequestStatusHistory[]
+
+  @@index([companyId])
 }
 
 model RequestStatusHistory {
   id                Int           @id @default(autoincrement())
+  companyId         Int
   requestId         Int
   previousStatus    RequestStatus
   newStatus         RequestStatus
   changedBy         Int
   changedAt         DateTime
+  company           Company       @relation(fields: [companyId], references: [id])
   request           Request       @relation(fields: [requestId], references: [id])
   changedByEmployee Employee      @relation(fields: [changedBy], references: [id])
+
+  @@index([companyId])
+}
+
+model EmailVerification {
+  tokenHash String    @id
+  companyId Int
+  accountId Int
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  company   Company   @relation(fields: [companyId], references: [id])
+  account   Employee  @relation(fields: [accountId], references: [id])
+
+  @@index([companyId])
+  @@index([accountId])
+}
+
+model Invitation {
+  tokenHash   String    @id
+  companyId   Int
+  accountId   Int       @unique
+  invitedById Int
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
+  company     Company   @relation(fields: [companyId], references: [id])
+  account     Employee  @relation("InvitedAccount", fields: [accountId], references: [id])
+  invitedBy   Employee  @relation("InvitedBy", fields: [invitedById], references: [id])
+
+  @@index([companyId])
 }

@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import {
   analyzeIntake,
+  ApiError,
   assignOwner,
   createRequest,
   Department,
@@ -8,13 +9,30 @@ import {
   getDepartments,
   getEmployees,
   getHistory,
+  getMe,
   getRequest,
   hasActionableIntakeDraft,
   HistoryRecord,
   IntakeResult,
+  login,
+  logout,
   ServiceRequest,
+  SessionUser,
+  StaleSessionResult,
+  beginClientSession,
+  currentSessionGeneration,
+  signupCompany,
   transition,
+  verifyEmail,
+  acceptInvitation,
 } from './api';
+import {
+  AcceptInviteForm,
+  CheckEmail,
+  CompanyTools,
+  SignupForm,
+  VerifyEmailForm,
+} from './onboarding';
 
 type IntakeStep = 'input' | 'troubleshoot' | 'offer' | 'draft' | 'resolved' | 'declined';
 
@@ -33,7 +51,10 @@ function formatWhen(value: string) {
 export default function App() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
-  const [actorId, setActorId] = useState<number | null>(null);
+  const [user, setUser] = useState<SessionUser | null>(null);
+  const [ready, setReady] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [departmentId, setDepartmentId] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -46,41 +67,92 @@ export default function App() {
   const [intakeText, setIntakeText] = useState('');
   const [intakeResult, setIntakeResult] = useState<IntakeResult | null>(null);
   const [intakeStep, setIntakeStep] = useState<IntakeStep>('input');
+  const [gate, setGate] = useState<'login' | 'signup' | 'check-email'>('login');
+  const [pendingEmail, setPendingEmail] = useState('');
+  const [verifyToken, setVerifyToken] = useState(() => new URLSearchParams(window.location.search).get('verify'));
+  const [inviteToken, setInviteToken] = useState(() => new URLSearchParams(window.location.search).get('invite'));
 
-  const actor = employees.find((employee) => Number(employee.id) === Number(actorId)) ?? null;
-  const canHandle = actor?.canHandle === true;
+  const canHandle = user?.canHandle === true;
   const eligibleOwners = employees.filter(
     (employee) =>
       employee.canHandle === true &&
       (request == null || Number(employee.id) !== Number(request.submittedBy)),
   );
   const isCurrentOwner =
-    actor != null && request != null && Number(request.currentOwnerId) === Number(actor.id);
+    user != null && request != null && Number(request.currentOwnerId) === Number(user.id);
   const ownerSelectValue = eligibleOwners.some((employee) => String(employee.id) === ownerId)
     ? ownerId
     : eligibleOwners[0]
       ? String(eligibleOwners[0].id)
       : '';
-  const canSubmitRequest = actorId !== null && departmentId !== '';
+  const canSubmitRequest = user !== null && departmentId !== '';
+
+  function clearAccountWorkspace() {
+    setUser(null);
+    setEmployees([]);
+    setDepartments([]);
+    setDepartmentId('');
+    setTitle('');
+    setDescription('');
+    setOwnerId('');
+    setLoadId('');
+    setRequest(null);
+    setHistory([]);
+    setEmail('');
+    setPassword('');
+    setIntakeText('');
+    setIntakeResult(null);
+    setIntakeStep('input');
+  }
+
+  function applySession(session: SessionUser) {
+    beginClientSession(session);
+    clearAccountWorkspace();
+    setUser(session);
+    return currentSessionGeneration();
+  }
 
   useEffect(() => {
-    Promise.all([getEmployees(), getDepartments()])
-      .then(([nextEmployees, nextDepartments]) => {
+    const generation = currentSessionGeneration();
+    getMe()
+      .then(async (session) => {
+        if (currentSessionGeneration() !== generation) {
+          return;
+        }
+        const started = applySession(session);
+        const [nextEmployees, nextDepartments] = await Promise.all([getEmployees(), getDepartments()]);
+        if (currentSessionGeneration() !== started) {
+          return;
+        }
         setEmployees(nextEmployees);
         setDepartments(nextDepartments);
-        if (nextEmployees[0]) setActorId(Number(nextEmployees[0].id));
         if (nextDepartments[0]) setDepartmentId(String(nextDepartments[0].id));
         const firstHandler = nextEmployees.find((employee) => employee.canHandle === true);
         if (firstHandler) setOwnerId(String(firstHandler.id));
       })
-      .catch((err: Error) => setError(err.message));
+      .catch((err: unknown) => {
+        if (err instanceof StaleSessionResult) {
+          return;
+        }
+        if (err instanceof ApiError && err.status === 401) {
+          clearAccountWorkspace();
+          return;
+        }
+        setUser(null);
+      })
+      .finally(() => setReady(true));
   }, []);
 
-  async function refresh(id: number, actingAs: number) {
-    const [nextRequest, nextHistory] = await Promise.all([
-      getRequest(actingAs, id),
-      getHistory(actingAs, id),
-    ]);
+  async function refresh(id: number) {
+    const generation = currentSessionGeneration();
+    const requestPromise = getRequest(id);
+    const historyPromise = getHistory(id);
+    requestPromise.catch(() => undefined);
+    historyPromise.catch(() => undefined);
+    const [nextRequest, nextHistory] = await Promise.all([requestPromise, historyPromise]);
+    if (currentSessionGeneration() !== generation) {
+      throw new StaleSessionResult();
+    }
     setRequest(nextRequest);
     setHistory(nextHistory);
   }
@@ -91,6 +163,12 @@ export default function App() {
     try {
       await action();
     } catch (err) {
+      if (err instanceof StaleSessionResult) {
+        return;
+      }
+      if (err instanceof ApiError && err.status === 401) {
+        clearAccountWorkspace();
+      }
       setError(err instanceof Error ? err.message : 'Request failed');
     } finally {
       setBusy(false);
@@ -113,28 +191,22 @@ export default function App() {
     setDescription(result.draft?.description ?? '');
   }
 
-  function onSelectActor(nextActorId: number) {
-    const nextActor = employees.find((employee) => Number(employee.id) === Number(nextActorId));
-    setActorId(nextActorId);
-    if (nextActor?.canHandle === true) {
-      setOwnerId(String(nextActor.id));
-    }
-    setRequest(null);
-    setHistory([]);
-    setError('');
-    resetIntake();
-  }
-
   async function submitCreate() {
-    if (actorId === null || departmentId === '') return;
-    const created = await createRequest(actorId, actorId, Number(departmentId), title, description);
+    if (user === null || departmentId === '') return;
+    const generation = currentSessionGeneration();
+    const created = await createRequest(user.id, Number(departmentId), title, description);
+    if (currentSessionGeneration() !== generation) {
+      throw new StaleSessionResult();
+    }
     setTitle('');
     setDescription('');
     if (departments[0]) {
       setDepartmentId(String(departments[0].id));
     }
-    resetIntake();
-    await refresh(created.id, actorId);
+    setIntakeText('');
+    setIntakeResult(null);
+    setIntakeStep('input');
+    await refresh(created.id);
   }
 
   function onCreate(event: FormEvent) {
@@ -144,10 +216,10 @@ export default function App() {
 
   function onLoad(event: FormEvent) {
     event.preventDefault();
-    if (actorId === null) return;
+    if (user === null) return;
     void run(async () => {
       try {
-        await refresh(Number(loadId), actorId);
+        await refresh(Number(loadId));
       } catch (err) {
         setRequest(null);
         setHistory([]);
@@ -160,33 +232,38 @@ export default function App() {
     event.preventDefault();
     if (
       !request ||
-      actor?.canHandle !== true ||
+      !user ||
+      user.canHandle !== true ||
       request.status === 'COMPLETED' ||
       eligibleOwners.length === 0
     ) {
       return;
     }
     void run(async () => {
-      await assignOwner(actor.id, request.id, Number(ownerSelectValue));
-      await refresh(request.id, actor.id);
+      await assignOwner(request.id, Number(ownerSelectValue));
+      await refresh(request.id);
     });
   }
 
   function onTransition(to: 'IN_PROGRESS' | 'COMPLETED') {
-    if (!request || actor?.canHandle !== true || request.currentOwnerId !== actor.id) return;
+    if (!request || !user || user.canHandle !== true || request.currentOwnerId !== user.id) return;
     void run(async () => {
-      await transition(actor.id, request.id, to, actor.id);
-      await refresh(request.id, actor.id);
+      await transition(request.id, to, user.id);
+      await refresh(request.id);
     });
   }
 
   function onAnalyze(event: FormEvent) {
     event.preventDefault();
-    if (actorId === null) return;
+    if (user === null) return;
     setIntakeResult(null);
     setIntakeStep('input');
     void run(async () => {
-      const result = await analyzeIntake(actorId, intakeText);
+      const generation = currentSessionGeneration();
+      const result = await analyzeIntake(intakeText);
+      if (currentSessionGeneration() !== generation) {
+        throw new StaleSessionResult();
+      }
       setIntakeResult(result);
       if (result.situation === 'problem' && result.troubleshootingSteps.length > 0) {
         setIntakeStep('troubleshoot');
@@ -220,26 +297,206 @@ export default function App() {
     setIntakeStep('draft');
   }
 
+  function onLogin(event: FormEvent) {
+    event.preventDefault();
+    void run(async () => {
+      const session = await login(email, password);
+      const started = applySession(session);
+      const [nextEmployees, nextDepartments] = await Promise.all([getEmployees(), getDepartments()]);
+      if (currentSessionGeneration() !== started) {
+        return;
+      }
+      setEmployees(nextEmployees);
+      setDepartments(nextDepartments);
+      if (nextDepartments[0]) setDepartmentId(String(nextDepartments[0].id));
+      const firstHandler = nextEmployees.find((employee) => employee.canHandle === true);
+      if (firstHandler) setOwnerId(String(firstHandler.id));
+    });
+  }
+
+  function onLogout() {
+    void run(async () => {
+      await logout();
+      clearAccountWorkspace();
+    });
+  }
+
+  function clearAuthQuery() {
+    window.history.replaceState({}, '', window.location.pathname);
+    setVerifyToken(null);
+    setInviteToken(null);
+  }
+
+  async function reloadLookups(generation: number) {
+    const [nextEmployees, nextDepartments] = await Promise.all([getEmployees(), getDepartments()]);
+    if (currentSessionGeneration() !== generation) {
+      return;
+    }
+    setEmployees(nextEmployees);
+    setDepartments(nextDepartments);
+    if (nextDepartments[0]) setDepartmentId(String(nextDepartments[0].id));
+    const firstHandler = nextEmployees.find((employee) => employee.canHandle === true);
+    if (firstHandler) setOwnerId(String(firstHandler.id));
+  }
+
+  if (!ready) {
+    return (
+      <div className="page">
+        <p>Loading…</p>
+      </div>
+    );
+  }
+
+  if (verifyToken) {
+    return (
+      <div className="page">
+        <header className="header">
+          <h1>Internal Operations Service Hub</h1>
+          <p>Verify your email to activate the company workspace</p>
+        </header>
+        {error ? (
+          <div className="alert" role="alert">
+            {error}
+          </div>
+        ) : null}
+        <VerifyEmailForm
+          token={verifyToken}
+          busy={busy}
+          onVerify={(token) =>
+            run(async () => {
+              await verifyEmail(token);
+              clearAuthQuery();
+              setGate('login');
+              setError('');
+            })
+          }
+        />
+      </div>
+    );
+  }
+
+  if (inviteToken) {
+    return (
+      <div className="page">
+        <header className="header">
+          <h1>Internal Operations Service Hub</h1>
+          <p>Set a password for your invited account</p>
+        </header>
+        {error ? (
+          <div className="alert" role="alert">
+            {error}
+          </div>
+        ) : null}
+        <AcceptInviteForm
+          token={inviteToken}
+          busy={busy}
+          onAccept={(token, password) =>
+            run(async () => {
+              await acceptInvitation(token, password);
+              clearAuthQuery();
+              setGate('login');
+              setPassword('');
+              setError('');
+            })
+          }
+        />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="page">
+        <header className="header">
+          <h1>Internal Operations Service Hub</h1>
+          <p>Sign in to create and track internal department requests</p>
+        </header>
+        {error ? (
+          <div className="alert" role="alert">
+            {error}
+          </div>
+        ) : null}
+        {gate === 'check-email' ? (
+          <CheckEmail
+            email={pendingEmail}
+            onBack={() => {
+              setGate('login');
+              setError('');
+            }}
+          />
+        ) : null}
+        {gate === 'signup' ? (
+          <>
+            <SignupForm
+              busy={busy}
+              onSubmit={(input) =>
+                run(async () => {
+                  const result = await signupCompany(input.companyName, input.name, input.email, input.password);
+                  setPendingEmail(result.email);
+                  setGate('check-email');
+                })
+              }
+            />
+            <button
+              className="btn-secondary"
+              type="button"
+              onClick={() => {
+                setGate('login');
+                setError('');
+              }}
+            >
+              Back to log in
+            </button>
+          </>
+        ) : null}
+        {gate === 'login' ? (
+          <section className="card">
+            <h2>Log in</h2>
+            <form className="stack" onSubmit={onLogin}>
+              <label>
+                Email
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  autoComplete="username"
+                  required
+                />
+              </label>
+              <label>
+                Password
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  autoComplete="current-password"
+                  required
+                />
+              </label>
+              <button className="btn-primary" type="submit" disabled={busy}>
+                Log in
+              </button>
+            </form>
+            <button className="btn-secondary" type="button" onClick={() => setGate('signup')}>
+              Create a company workspace
+            </button>
+          </section>
+        ) : null}
+      </div>
+    );
+  }
+
   return (
     <div className="page">
       <header className="header">
         <h1>Internal Operations Service Hub</h1>
         <p>Create and track internal department requests</p>
-        <div className="actor-switcher" role="group" aria-label="Acting as">
-          <span>Acting as:</span>
-          {employees.map((employee, index) => (
-            <span key={employee.id}>
-              {index > 0 ? <span className="actor-divider">|</span> : null}
-              <button
-                type="button"
-                className="actor-btn"
-                aria-pressed={actorId === employee.id}
-                onClick={() => onSelectActor(employee.id)}
-              >
-                {employee.name}
-              </button>
-            </span>
-          ))}
+        <div className="actor-switcher">
+          <span data-testid="signed-in-name">Signed in as {user.name}</span>
+          <span>{user.companyName}</span>
+          <button className="btn-secondary" type="button" onClick={onLogout} disabled={busy}>
+            Log out
+          </button>
         </div>
       </header>
 
@@ -247,6 +504,17 @@ export default function App() {
         <div className="alert" role="alert">
           {error}
         </div>
+      ) : null}
+
+      {user.role === 'SUPER_ADMIN' ? (
+        <CompanyTools
+          departments={departments}
+          busy={busy}
+          run={run}
+          onChanged={async () => {
+            await reloadLookups(currentSessionGeneration());
+          }}
+        />
       ) : null}
 
       <section className="card">
@@ -267,7 +535,7 @@ export default function App() {
                 disabled={busy}
               />
             </label>
-            <button className="btn-primary" type="submit" disabled={busy || actorId === null}>
+            <button className="btn-primary" type="submit" disabled={busy}>
               Analyze
             </button>
           </form>
@@ -401,7 +669,7 @@ export default function App() {
         <section className="card">
           <h2>Create Request</h2>
           <p className="muted">
-            Requests are submitted as {actor ? actor.name : 'the selected user'}.
+            Requests are submitted as {user.name}.
           </p>
           <form className="stack" onSubmit={onCreate}>
             <label>
@@ -450,7 +718,7 @@ export default function App() {
                 inputMode="numeric"
               />
             </label>
-            <button className="btn-secondary" type="submit" disabled={busy || actorId === null}>
+            <button className="btn-secondary" type="submit" disabled={busy}>
               Load Request
             </button>
           </form>

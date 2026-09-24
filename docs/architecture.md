@@ -1,6 +1,6 @@
 # Internal Operations Service Hub - Architecture
 
-The sections from Requirement through Architecture Decisions are the Week 1 architecture record. Week 4 is what the repository runs today: a React UI, a NestJS API, PostgreSQL, temporary `X-Actor-Id` identity, manual owner assignment, and advisory intake. Confirmed later changes are in [Proposed full-product changes](#proposed-full-product-changes-not-implemented). They are not implemented. Remaining decisions are listed in `docs/product-spec.md` and are not chosen here.
+The sections from Requirement through Architecture Decisions are the Week 1 architecture record. The repository now runs the Week 4 React UI, NestJS API, PostgreSQL, advisory intake, email/password sessions, and company signup. Manual owner assignment and `canHandle` remain the temporary request rules, and every protected query is limited to the caller’s company. Confirmed later changes are in [Proposed full-product changes](#proposed-full-product-changes). Claiming, approvals, and admin screens are not implemented. Remaining decisions are listed in `docs/product-spec.md`.
 
 ## Requirement
 
@@ -149,13 +149,13 @@ Reason: This prevents users from bypassing access rules through the UI.
 
 Consequence: The backend must check authorization before processing requests.
 
-## Proposed full-product changes (not implemented)
+## Proposed full-product changes
 
-Confirmed product rules are in `docs/product-spec.md`. This section only says how those rules sit on the Week 1 architecture. Release, reassignment, password reset, and JWT/session design are still open there.
+Confirmed product rules are in `docs/product-spec.md`. Release, reassignment, and password reset are still open. Email/password sessions from `docs/decisions/ADR-002-authentication.md` are implemented. Company signup and company-scoped access from `docs/decisions/ADR-003-company-signup.md` are implemented. Claiming, approvals, and admin screens are not.
 
 ### Identity
 
-Email and password authentication replaces `X-Actor-Id`. There is no public registration. Super Admin provisions accounts. The first Super Admin is created with a one-time setup command. The backend issues and verifies a JWT and then applies role and handler-eligibility checks. Password reset and JWT lifetime, refresh, and logout are still open. The Week 1 rule stands: the backend does not trust identity or permissions sent only by the UI.
+Email and password authentication replaces `X-Actor-Id`. There is no public employee signup. A founder creates a company workspace and verifies their email before that company and its first Super Admin are active. That Super Admin invites staff in the same company, and invitees set their own passwords. The retired first-Super-Admin command does not create an account. The backend checks the session, requires the session account and company to match the token subject and the account row, and loads role and handler eligibility from the database. Queries for requests, history, employees, departments, and intake departments include the caller’s company, so another company’s ids do not reveal or change that data. Absolute expiry is 8 hours. Idle expiry is 30 minutes. Sessions are revocable. Login throttling counts in-flight attempts against the same email and IP failure limits. A failed activity timestamp does not change the response of a change that already committed. The UI clears the previous account's request, history, intake, form, lookup, and CSRF state on logout, on a protected **401**, and when another account signs in, and it drops late responses from the previous session. Password reset, production email delivery, and deployment hosting are still open. Until a mail provider is chosen, production signup and invitations fail and create no records. The Week 1 rule stands: the backend does not trust identity or permissions sent only by the UI.
 
 Deactivation immediately blocks login and authenticated actions, keeps history, and blocks new claims. It is rejected while the account owns a request that is not `COMPLETED`.
 
@@ -169,7 +169,7 @@ Week 4 still assigns an owner with `PATCH /requests/:id/owner`. The planned path
 
 ### Approval
 
-ADR-001 still holds: submission stays synchronous, and approval does not block storing the request. When the requirement captured on that request says approval is required, the request stays out of the claimable queue until a destination Department Admin or Super Admin approves it. The submitter still sees it, authorized approvers see it in the approval inbox, and Super Admin sees it with every other request. Denial stores a reason, leaves work status unchanged, and sets approval state to Denied. That request cannot be claimed. Resubmission creates a new request and keeps the original decision. Approval state stays off the work-status field. Work status remains `SUBMITTED → IN_PROGRESS → COMPLETED`.
+ADR-001 still holds: submission stays synchronous, and approval does not block storing the request. When the requirement captured on that request says approval is required, the request stays out of the claimable queue until a destination Department Admin or Super Admin approves it. The submitter still sees it, authorized approvers see it in the approval inbox, and Super Admin sees it with every other request in that same company. Denial stores a reason, leaves work status unchanged, and sets approval state to Denied. That request cannot be claimed. Resubmission creates a new request and keeps the original decision. Approval state stays off the work-status field. Work status remains `SUBMITTED → IN_PROGRESS → COMPLETED`.
 
 ### Proposed claim flow
 
