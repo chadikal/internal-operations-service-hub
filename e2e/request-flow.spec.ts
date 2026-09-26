@@ -38,7 +38,7 @@ test.describe('Service request user journey', () => {
     await expect(page.getByText('Submitter', { exact: true })).toBeVisible();
     await expect(page.getByRole('definition').filter({ hasText: /^John$/ })).toBeVisible();
 
-    await page.getByRole('button', { name: 'Assign owner' }).click();
+    await page.getByRole('button', { name: 'Claim' }).click();
     await expect(page.getByRole('definition').filter({ hasText: /^Chadi$/ })).toBeVisible();
 
     await page.getByRole('button', { name: 'Start Request' }).click();

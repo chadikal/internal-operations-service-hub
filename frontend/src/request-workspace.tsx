@@ -1,7 +1,6 @@
 import { FormEvent } from 'react';
 import {
   Department,
-  Employee,
   hasActionableIntakeDraft,
   HistoryRecord,
   IntakeResult,
@@ -17,6 +16,26 @@ function statusClass(status: ServiceRequest['status']) {
   if (status === 'SUBMITTED') return 'badge badge-submitted';
   if (status === 'IN_PROGRESS') return 'badge badge-progress';
   return 'badge badge-completed';
+}
+
+function approvalAllowsClaim(request: ServiceRequest) {
+  if (request.approvalState === 'NOT_REQUIRED' || request.approvalState === 'APPROVED') {
+    return true;
+  }
+  return (
+    request.approvalState == null &&
+    (request.capturedApprovalPolicy == null || request.capturedApprovalPolicy === 'NONE')
+  );
+}
+
+function approvalBlocksClaim(request: ServiceRequest) {
+  return (
+    request.approvalState === 'PENDING' ||
+    request.approvalState === 'DENIED' ||
+    (request.approvalState == null &&
+      (request.capturedApprovalPolicy === 'DEPARTMENT_ADMIN' ||
+        request.capturedApprovalPolicy === 'SUPER_ADMIN'))
+  );
 }
 
 function formatWhen(value: string) {
@@ -120,7 +139,6 @@ function DepartmentAndTypeFields({
 
 export function RequestWorkspace({
   user,
-  employees,
   departments,
   requestTypes,
   departmentId,
@@ -131,8 +149,6 @@ export function RequestWorkspace({
   setTitle,
   description,
   setDescription,
-  ownerId,
-  setOwnerId,
   loadId,
   setLoadId,
   request,
@@ -145,7 +161,7 @@ export function RequestWorkspace({
   canSubmitRequest,
   onCreate,
   onLoad,
-  onAssignOwner,
+  onClaim,
   onTransition,
   onAnalyze,
   onProblemSolved,
@@ -155,7 +171,6 @@ export function RequestWorkspace({
   showDetails = true,
 }: {
   user: SessionUser;
-  employees: Employee[];
   departments: Department[];
   requestTypes: RequestType[];
   departmentId: string;
@@ -166,8 +181,6 @@ export function RequestWorkspace({
   setTitle: (value: string) => void;
   description: string;
   setDescription: (value: string) => void;
-  ownerId: string;
-  setOwnerId: (value: string) => void;
   loadId: string;
   setLoadId: (value: string) => void;
   request: ServiceRequest | null;
@@ -180,7 +193,7 @@ export function RequestWorkspace({
   canSubmitRequest: boolean;
   onCreate: (event: FormEvent) => void;
   onLoad: (event: FormEvent) => void;
-  onAssignOwner: (event: FormEvent) => void;
+  onClaim: () => void;
   onTransition: (to: 'IN_PROGRESS' | 'COMPLETED') => void;
   onAnalyze: (event: FormEvent) => void;
   onProblemSolved: (solved: boolean) => void;
@@ -189,20 +202,18 @@ export function RequestWorkspace({
   showLoadForm?: boolean;
   showDetails?: boolean;
 }) {
-  const canHandle = user.canHandle === true;
-  const approvalBlocksHandling =
-    request?.approvalState === 'PENDING' || request?.approvalState === 'DENIED';
-  const eligibleOwners = employees.filter(
-    (employee) =>
-      employee.canHandle === true &&
-      (request == null || Number(employee.id) !== Number(request.submittedBy)),
-  );
+  const canHandle = user.canHandle === true && user.role !== 'SUPER_ADMIN';
+  const approvalBlocksHandling = request != null && approvalBlocksClaim(request);
   const isCurrentOwner = request != null && Number(request.currentOwnerId) === Number(user.id);
-  const ownerSelectValue = eligibleOwners.some((employee) => String(employee.id) === ownerId)
-    ? ownerId
-    : eligibleOwners[0]
-      ? String(eligibleOwners[0].id)
-      : '';
+  const canClaim =
+    request != null &&
+    canHandle &&
+    user.active &&
+    request.currentOwnerId == null &&
+    user.departmentId != null &&
+    Number(request.departmentId) === Number(user.departmentId) &&
+    Number(request.submittedBy) !== Number(user.id) &&
+    approvalAllowsClaim(request);
 
   return (
     <>
@@ -482,39 +493,19 @@ export function RequestWorkspace({
             ) : null}
 
             {canHandle && !approvalBlocksHandling ? (
-              <>
-                {request.status !== 'COMPLETED' ? (
-                  eligibleOwners.length === 0 ? (
-                    <p className="muted">No eligible handlers available</p>
-                  ) : (
-                    <form className="inline-form" onSubmit={onAssignOwner}>
-                      <label>
-                        Assign owner
-                        <select
-                          value={ownerSelectValue}
-                          onChange={(event) => setOwnerId(event.target.value)}
-                          disabled={busy}
-                        >
-                          {eligibleOwners.map((employee) => (
-                            <option key={employee.id} value={employee.id}>
-                              {employee.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <button className="btn-secondary" type="submit" disabled={busy}>
-                        Assign owner
-                      </button>
-                    </form>
-                  )
+              <div className="actions">
+                {canClaim ? (
+                  <>
+                    <p className="muted">
+                      Claim this request to become the owner. It stays Submitted until you start the work.
+                    </p>
+                    <button className="btn-primary" type="button" disabled={busy} onClick={onClaim}>
+                      Claim
+                    </button>
+                  </>
                 ) : null}
 
-                <div className="actions">
-                  {request.currentOwnerId === null && request.status !== 'COMPLETED' ? (
-                    <p className="muted">Assign an owner before work can start.</p>
-                  ) : null}
-
-                  {isCurrentOwner && request.status === 'SUBMITTED' ? (
+                {isCurrentOwner && request.status === 'SUBMITTED' ? (
                     <button
                       className="btn-primary"
                       type="button"
@@ -536,7 +527,6 @@ export function RequestWorkspace({
                     </button>
                   ) : null}
                 </div>
-              </>
             ) : null}
           </section>
 

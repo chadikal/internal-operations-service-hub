@@ -132,10 +132,9 @@ describe('Approval decisions', () => {
     expect(unnecessary.body.message).toMatch(/does not require/i);
 
     const assigned = await request(app.getHttpServer())
-      .patch(`/requests/${created.body.id}/owner`)
-      .set(await authHeaders(app, prisma, CHADI))
-      .send({ currentOwnerId: CHADI });
-    expect(assigned.status).toBe(200);
+      .post(`/requests/${created.body.id}/claim`)
+      .set(await authHeaders(app, prisma, CHADI));
+    expect(assigned.status).toBe(201);
     expect(assigned.body.approvalState).toBe('NOT_REQUIRED');
   });
 
@@ -174,9 +173,8 @@ describe('Approval decisions', () => {
     expect(selfView.body.description).toBe('Badge access');
 
     const blockedAssign = await request(app.getHttpServer())
-      .patch(`/requests/${created.body.id}/owner`)
-      .set(await authHeaders(app, prisma, CHADI))
-      .send({ currentOwnerId: CHADI });
+      .post(`/requests/${created.body.id}/claim`)
+      .set(await authHeaders(app, prisma, CHADI));
     expect(blockedAssign.status).toBe(409);
     expect(blockedAssign.body.message).toMatch(/waiting for approval/i);
 
@@ -215,14 +213,13 @@ describe('Approval decisions', () => {
     expect(await prisma.approvalDecision.count({ where: { requestId: created.body.id } })).toBe(1);
 
     const blockedAfterDenial = await request(app.getHttpServer())
-      .patch(`/requests/${created.body.id}/owner`)
-      .set(await authHeaders(app, prisma, CHADI))
-      .send({ currentOwnerId: CHADI });
+      .post(`/requests/${created.body.id}/claim`)
+      .set(await authHeaders(app, prisma, CHADI));
     expect(blockedAfterDenial.status).toBe(409);
     expect(blockedAfterDenial.body.message).toMatch(/denied/i);
   });
 
-  it('approves without changing work status and then allows temporary assignment', async () => {
+  it('approves without changing work status and then allows the handler to claim', async () => {
     const created = await submit(JOHN, IT, deptTypeId, 'Software seat');
     const approved = await request(app.getHttpServer())
       .post(`/requests/${created.body.id}/approval`)
@@ -234,10 +231,9 @@ describe('Approval decisions', () => {
     expect(approved.body.approvalDecision.approverRole).toBe('DEPARTMENT_ADMIN');
 
     const assigned = await request(app.getHttpServer())
-      .patch(`/requests/${created.body.id}/owner`)
-      .set(await authHeaders(app, prisma, CHADI))
-      .send({ currentOwnerId: CHADI });
-    expect(assigned.status).toBe(200);
+      .post(`/requests/${created.body.id}/claim`)
+      .set(await authHeaders(app, prisma, CHADI));
+    expect(assigned.status).toBe(201);
     expect(assigned.body.status).toBe('SUBMITTED');
     expect(assigned.body.approvalState).toBe('APPROVED');
   });
@@ -388,9 +384,8 @@ describe('Approval decisions', () => {
     expect(approved.body.approvalDecision.approverRole).toBe('SUPER_ADMIN');
 
     const handled = await request(app.getHttpServer())
-      .patch(`/requests/${created.body.id}/owner`)
-      .set(await loginById(second.id))
-      .send({ currentOwnerId: CHADI });
+      .post(`/requests/${created.body.id}/claim`)
+      .set(await loginById(second.id));
     expect(handled.status).toBe(403);
   });
 
@@ -420,7 +415,7 @@ describe('Approval decisions', () => {
     expect(await prisma.approvalDecision.count({ where: { requestId: created.body.id } })).toBe(1);
   });
 
-  it('keeps a legacy request without an approval state readable and handleable', async () => {
+  it('keeps a legacy request without an approval state readable and claimable', async () => {
     const legacy = await prisma.request.create({
       data: {
         companyId,
@@ -440,10 +435,11 @@ describe('Approval decisions', () => {
     expect(read.body.approvalDecision).toBeNull();
 
     const assigned = await request(app.getHttpServer())
-      .patch(`/requests/${legacy.id}/owner`)
-      .set(await authHeaders(app, prisma, CHADI))
-      .send({ currentOwnerId: CHADI });
-    expect(assigned.status).toBe(200);
+      .post(`/requests/${legacy.id}/claim`)
+      .set(await authHeaders(app, prisma, CHADI));
+    expect(assigned.status).toBe(201);
+    expect(assigned.body.approvalState).toBeNull();
+    expect(assigned.body.currentOwnerId).toBe(CHADI);
     expect(assigned.body.status).toBe('SUBMITTED');
   });
 

@@ -45,6 +45,12 @@ export class RequestsController {
     return this.requestsService.decide(request.auth!.id, id, dto);
   }
 
+  @Post(':id/claim')
+  @RecordsActivity()
+  claim(@Req() request: AuthenticatedRequest, @Param('id', ParseIntPipe) id: number) {
+    return this.requestsService.claim(request.auth!.id, id);
+  }
+
   @Patch(':id/owner')
   @RecordsActivity()
   assignOwner(

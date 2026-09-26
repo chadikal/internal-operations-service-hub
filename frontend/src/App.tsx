@@ -2,12 +2,10 @@ import { FormEvent, useEffect, useState } from 'react';
 import {
   analyzeIntake,
   ApiError,
-  assignOwner,
+  claimRequest,
   createRequest,
   Department,
-  Employee,
   getDepartments,
-  getEmployees,
   getHistory,
   getMe,
   getRequest,
@@ -66,7 +64,6 @@ function syncUrl(role: string | undefined, view: AdminView | 'home') {
 }
 
 export default function App() {
-  const [employees, setEmployees] = useState<Employee[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [requestTypes, setRequestTypes] = useState<RequestType[]>([]);
   const [user, setUser] = useState<SessionUser | null>(null);
@@ -77,7 +74,6 @@ export default function App() {
   const [requestTypeId, setRequestTypeId] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [ownerId, setOwnerId] = useState('');
   const [loadId, setLoadId] = useState('');
   const [request, setRequest] = useState<ServiceRequest | null>(null);
   const [history, setHistory] = useState<HistoryRecord[]>([]);
@@ -96,14 +92,12 @@ export default function App() {
   const canSubmitRequest = user !== null && departmentId !== '' && requestTypeId !== '';
 
   function resetWorkspaceData() {
-    setEmployees([]);
     setDepartments([]);
     setRequestTypes([]);
     setDepartmentId('');
     setRequestTypeId('');
     setTitle('');
     setDescription('');
-    setOwnerId('');
     setLoadId('');
     setRequest(null);
     setHistory([]);
@@ -165,12 +159,11 @@ export default function App() {
       return;
     }
     const generation = currentSessionGeneration();
-    void Promise.all([getEmployees(), getDepartments(), getRequestTypes()]).then(
-      ([nextEmployees, nextDepartments, nextTypes]) => {
+    void Promise.all([getDepartments(), getRequestTypes()]).then(
+      ([nextDepartments, nextTypes]) => {
         if (currentSessionGeneration() !== generation) {
           return;
         }
-        setEmployees(nextEmployees);
         setDepartments(nextDepartments);
         setRequestTypes(nextTypes);
         const nextDepartmentId =
@@ -191,13 +184,6 @@ export default function App() {
           }
           return firstRequestTypeId(nextTypes, nextDepartmentId);
         });
-        setOwnerId((current) => {
-          const handlers = nextEmployees.filter((employee) => employee.canHandle === true);
-          if (current && handlers.some((employee) => String(employee.id) === current)) {
-            return current;
-          }
-          return handlers[0] ? String(handlers[0].id) : '';
-        });
       },
     );
   }, [user, view]);
@@ -210,22 +196,18 @@ export default function App() {
           return;
         }
         const started = applySession(session);
-        const [nextEmployees, nextDepartments, nextTypes] = await Promise.all([
-          getEmployees(),
+        const [nextDepartments, nextTypes] = await Promise.all([
           getDepartments(),
           getRequestTypes(),
         ]);
         if (currentSessionGeneration() !== started) {
           return;
         }
-        setEmployees(nextEmployees);
         setDepartments(nextDepartments);
         setRequestTypes(nextTypes);
         const nextDepartmentId = nextDepartments[0] ? String(nextDepartments[0].id) : '';
         setDepartmentId(nextDepartmentId);
         setRequestTypeId(firstRequestTypeId(nextTypes, nextDepartmentId));
-        const firstHandler = nextEmployees.find((employee) => employee.canHandle === true);
-        if (firstHandler) setOwnerId(String(firstHandler.id));
       })
       .catch((err: unknown) => {
         if (err instanceof StaleSessionResult) {
@@ -338,27 +320,10 @@ export default function App() {
     });
   }
 
-  function onAssignOwner(event: FormEvent) {
-    event.preventDefault();
-    if (
-      !request ||
-      !user ||
-      user.canHandle !== true ||
-      request.status === 'COMPLETED'
-    ) {
-      return;
-    }
-    const eligibleOwners = employees.filter(
-      (employee) => employee.canHandle === true && Number(employee.id) !== Number(request.submittedBy),
-    );
-    if (eligibleOwners.length === 0) {
-      return;
-    }
-    const ownerSelectValue = eligibleOwners.some((employee) => String(employee.id) === ownerId)
-      ? ownerId
-      : String(eligibleOwners[0].id);
+  function onClaim() {
+    if (!request || !user || user.canHandle !== true || user.role === 'SUPER_ADMIN') return;
     void run(async () => {
-      await assignOwner(request.id, Number(ownerSelectValue));
+      await claimRequest(request.id);
       await refresh(request.id);
     });
   }
@@ -424,22 +389,15 @@ export default function App() {
     void run(async () => {
       const session = await login(email, password);
       const started = applySession(session);
-      const [nextEmployees, nextDepartments, nextTypes] = await Promise.all([
-        getEmployees(),
-        getDepartments(),
-        getRequestTypes(),
-      ]);
+      const [nextDepartments, nextTypes] = await Promise.all([getDepartments(), getRequestTypes()]);
       if (currentSessionGeneration() !== started) {
         return;
       }
-      setEmployees(nextEmployees);
       setDepartments(nextDepartments);
       setRequestTypes(nextTypes);
       const nextDepartmentId = nextDepartments[0] ? String(nextDepartments[0].id) : '';
       setDepartmentId(nextDepartmentId);
       setRequestTypeId(firstRequestTypeId(nextTypes, nextDepartmentId));
-      const firstHandler = nextEmployees.find((employee) => employee.canHandle === true);
-      if (firstHandler) setOwnerId(String(firstHandler.id));
     });
   }
 
@@ -459,7 +417,6 @@ export default function App() {
   const workspace = user ? (
     <RequestWorkspace
       user={user}
-      employees={employees}
       departments={departments}
       requestTypes={requestTypes}
       departmentId={departmentId}
@@ -470,8 +427,6 @@ export default function App() {
       setTitle={setTitle}
       description={description}
       setDescription={setDescription}
-      ownerId={ownerId}
-      setOwnerId={setOwnerId}
       loadId={loadId}
       setLoadId={setLoadId}
       request={request}
@@ -484,7 +439,7 @@ export default function App() {
       canSubmitRequest={canSubmitRequest}
       onCreate={onCreate}
       onLoad={onLoad}
-      onAssignOwner={onAssignOwner}
+      onClaim={onClaim}
       onTransition={onTransition}
       onAnalyze={onAnalyze}
       onProblemSolved={onProblemSolved}

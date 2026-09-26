@@ -494,13 +494,13 @@ describe('company Super Admin workspace', () => {
       .set(headersA)
       .send({ currentOwnerId: founderA.id });
     expect(superAdminOwns.status).toBe(403);
-    expect(superAdminOwns.body.message).toMatch(/not allowed to handle/i);
+    expect(superAdminOwns.body.message).toMatch(/cannot be assigned/i);
     const handlerAssignsSuperAdmin = await request(app.getHttpServer())
       .patch(`/requests/${assignedBySam.body.id}/owner`)
       .set(staffHeaders)
       .send({ currentOwnerId: founderA.id });
     expect(handlerAssignsSuperAdmin.status).toBe(403);
-    expect(handlerAssignsSuperAdmin.body.message).toMatch(/Super Admin cannot own/i);
+    expect(handlerAssignsSuperAdmin.body.message).toMatch(/cannot be assigned/i);
     const superAdminAssignsStaff = await request(app.getHttpServer())
       .patch(`/requests/${mine.body.id}/owner`)
       .set(headersA)
@@ -515,11 +515,10 @@ describe('company Super Admin workspace', () => {
     expect(
       (
         await request(app.getHttpServer())
-          .patch(`/requests/${mine.body.id}/owner`)
+          .post(`/requests/${mine.body.id}/claim`)
           .set(staffHeaders)
-          .send({ currentOwnerId: staff.id })
       ).status,
-    ).toBe(200);
+    ).toBe(201);
     await prisma.request.update({
       where: { id: theirs.body.id },
       data: { status: RequestStatus.IN_PROGRESS, statusUpdatedAt: new Date() },

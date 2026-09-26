@@ -290,10 +290,10 @@ export function getHistory(id: number) {
   return send<HistoryRecord[]>(`/requests/${id}/history`);
 }
 
-export function assignOwner(id: number, currentOwnerId: number) {
-  return send<ServiceRequest>(`/requests/${id}/owner`, {
-    method: 'PATCH',
-    body: JSON.stringify({ currentOwnerId }),
+export function claimRequest(id: number) {
+  return send<ServiceRequest>(`/requests/${id}/claim`, {
+    method: 'POST',
+    body: '{}',
   });
 }
 

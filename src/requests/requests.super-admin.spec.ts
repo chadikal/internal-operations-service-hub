@@ -134,7 +134,7 @@ describe('Super Admin request prohibitions', () => {
       .set(staffHeaders)
       .send({ currentOwnerId: founder.id });
     expect(assign.status).toBe(403);
-    expect(assign.body.message).toMatch(/Super Admin cannot own/i);
+    expect(assign.body.message).toMatch(/cannot be assigned/i);
     expect((await prisma.request.findUniqueOrThrow({ where: { id: created.body.id } })).currentOwnerId).toBeNull();
 
     const selfAssign = await request(app.getHttpServer())
@@ -162,7 +162,7 @@ describe('Super Admin request prohibitions', () => {
       .set(headersA)
       .send({ currentOwnerId: staff.id });
     expect(assign.status).toBe(403);
-    expect(assign.body.message).toMatch(/not allowed to handle/i);
+    expect(assign.body.message).toMatch(/cannot be assigned/i);
     expect((await prisma.request.findUniqueOrThrow({ where: { id: created.body.id } })).currentOwnerId).toBeNull();
 
     const transition = await request(app.getHttpServer())

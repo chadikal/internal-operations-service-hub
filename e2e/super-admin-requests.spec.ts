@@ -77,7 +77,7 @@ test.describe('Super Admin requests', () => {
 
     await page.getByLabel('Request ID').fill(adaRequestId);
     await page.getByRole('button', { name: 'Load Request' }).click();
-    await page.getByRole('button', { name: 'Assign owner' }).click();
+    await page.getByRole('button', { name: 'Claim' }).click();
     await page.getByRole('button', { name: 'Start Request' }).click();
     await expect(page.getByTestId('request-status')).toHaveText('IN PROGRESS');
 

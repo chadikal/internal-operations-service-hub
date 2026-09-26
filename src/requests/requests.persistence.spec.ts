@@ -41,10 +41,9 @@ describe('Request persistence', () => {
     const id = created.body.id as number;
 
     const owned = await request(app.getHttpServer())
-      .patch(`/requests/${id}/owner`)
-      .set(await authHeaders(app, prisma, CHADI))
-      .send({ currentOwnerId: CHADI });
-    expect(owned.status).toBe(200);
+      .post(`/requests/${id}/claim`)
+      .set(await authHeaders(app, prisma, CHADI));
+    expect(owned.status).toBe(201);
 
     const started = await request(app.getHttpServer())
       .patch(`/requests/${id}/transition`)
