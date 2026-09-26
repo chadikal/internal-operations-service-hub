@@ -36,6 +36,7 @@ import {
   EmployeesPage,
 } from './admin';
 import { AdminRequestsPage } from './admin-requests';
+import { ApprovalInbox } from './approvals';
 import {
   AcceptInviteForm,
   CheckEmail,
@@ -284,7 +285,7 @@ export default function App() {
     const matchesDepartment = requestTypes.some(
       (item) => String(item.id) === suggestedType && String(item.departmentId) === nextDepartmentId,
     );
-    setRequestTypeId(matchesDepartment ? suggestedType : firstRequestTypeId(requestTypes, nextDepartmentId));
+    setRequestTypeId(matchesDepartment ? suggestedType : '');
     setTitle(result.draft?.summary ?? '');
     setDescription(result.draft?.description ?? '');
   }
@@ -667,12 +668,7 @@ export default function App() {
             urlSearch={urlSearch}
           />
         ) : null}
-        {adminView === 'approvals' ? (
-          <ComingLaterPage
-            title="Approvals"
-            detail="The approval inbox is not implemented. This page does not list pending approvals."
-          />
-        ) : null}
+        {adminView === 'approvals' ? <ApprovalInbox role="SUPER_ADMIN" /> : null}
         {adminView === 'settings' ? (
           <ComingLaterPage
             title="Settings"
@@ -702,6 +698,8 @@ export default function App() {
           {error}
         </div>
       ) : null}
+
+      {user.role === 'DEPARTMENT_ADMIN' ? <ApprovalInbox role="DEPARTMENT_ADMIN" /> : null}
 
       {workspace}
     </div>

@@ -30,6 +30,18 @@ enum ApprovalPolicy {
   SUPER_ADMIN
 }
 
+enum ApprovalState {
+  NOT_REQUIRED
+  PENDING
+  APPROVED
+  DENIED
+}
+
+enum ApprovalDecisionOutcome {
+  APPROVED
+  DENIED
+}
+
 model Company {
   id                 Int                 @id @default(autoincrement())
   name               String
@@ -43,6 +55,7 @@ model Company {
   sessions           Session[]
   emailVerifications EmailVerification[]
   invitations        Invitation[]
+  approvalDecisions  ApprovalDecision[]
 }
 
 model Department {
@@ -90,6 +103,7 @@ model Employee {
   emailVerifications EmailVerification[]
   invitation         Invitation?         @relation("InvitedAccount")
   sentInvitations    Invitation[]        @relation("InvitedBy")
+  approvalDecisions  ApprovalDecision[]  @relation("ApprovalApprover")
 
   @@index([companyId])
 }
@@ -116,6 +130,7 @@ model Request {
   departmentId            Int
   requestTypeId           Int?
   capturedApprovalPolicy  ApprovalPolicy?
+  approvalState           ApprovalState?
   currentOwnerId          Int?
   status                  RequestStatus          @default(SUBMITTED)
   statusUpdatedAt         DateTime
@@ -127,6 +142,23 @@ model Request {
   requestType             RequestType?           @relation(fields: [requestTypeId], references: [id])
   currentOwner            Employee?              @relation("RequestOwner", fields: [currentOwnerId], references: [id])
   history                 RequestStatusHistory[]
+  approvalDecision        ApprovalDecision?
+
+  @@index([companyId])
+}
+
+model ApprovalDecision {
+  id           Int                     @id @default(autoincrement())
+  companyId    Int
+  requestId    Int                     @unique
+  decision     ApprovalDecisionOutcome
+  reason       String?
+  approverId   Int
+  approverRole AccountRole
+  decidedAt    DateTime
+  company      Company                 @relation(fields: [companyId], references: [id])
+  request      Request                 @relation(fields: [requestId], references: [id])
+  approver     Employee                @relation("ApprovalApprover", fields: [approverId], references: [id])
 
   @@index([companyId])
 }

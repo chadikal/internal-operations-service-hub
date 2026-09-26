@@ -93,8 +93,9 @@ test.describe('Super Admin workspace', () => {
     await expect(page.getByRole('heading', { name: 'Create Request' })).toBeVisible();
 
     await nav.getByRole('link', { name: /Approvals/ }).click();
-    await expect(page.getByTestId('coming-later')).toContainText('Coming later');
+    await expect(page.getByTestId('approval-inbox')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Approvals' })).toBeVisible();
+    await expect(page.getByText('No requests are waiting for your approval.')).toBeVisible();
 
     await page.getByRole('button', { name: 'Log out' }).click();
     await expect(page.getByRole('heading', { name: 'Log in' })).toBeVisible();

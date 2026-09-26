@@ -5,9 +5,16 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { RequestStatus as PrismaRequestStatus, AccountRole, ApprovalPolicy } from '@prisma/client';
+import {
+  RequestStatus as PrismaRequestStatus,
+  AccountRole,
+  ApprovalPolicy,
+  ApprovalState,
+  ApprovalDecisionOutcome,
+} from '@prisma/client';
 import { AssignOwnerDto } from './dto/assign-owner.dto';
 import { CreateRequestDto } from './dto/create-request.dto';
+import { DecideApprovalDto } from './dto/decide-approval.dto';
 import { TransitionRequestDto } from './dto/transition-request.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { RequestStatus } from './request-status.enum';
@@ -25,7 +32,32 @@ const requestInclude = {
   department: true,
   requestType: { select: { id: true, name: true } },
   currentOwner: { select: personSelect },
+  approvalDecision: {
+    include: { approver: { select: personSelect } },
+  },
 } as const;
+
+type Actor = {
+  id: number;
+  companyId: number;
+  canHandle: boolean;
+  role: AccountRole;
+  departmentId: number | null;
+  active: boolean;
+};
+
+type DecisionRequest = {
+  companyId: number;
+  submittedBy: number;
+  departmentId: number;
+  capturedApprovalPolicy: ApprovalPolicy | null;
+  approvalState: ApprovalState | null;
+};
+
+const DEPARTMENT_ADMIN_WAIT_NOTICE =
+  'No other Department Admin in the destination department can decide this request. It stays pending.';
+const SUPER_ADMIN_WAIT_NOTICE =
+  'No other Super Admin can decide this request. It stays pending.';
 
 @Injectable()
 export class RequestsService {
@@ -48,6 +80,7 @@ export class RequestsService {
         departmentId: dto.departmentId,
         requestTypeId: requestType.id,
         capturedApprovalPolicy: requestType.approvalPolicy,
+        approvalState: initialApprovalState(requestType.approvalPolicy),
         currentOwnerId: null,
         status: PrismaRequestStatus.SUBMITTED,
         statusUpdatedAt: new Date(),
@@ -57,14 +90,71 @@ export class RequestsService {
       include: requestInclude,
     });
 
-    return this.toRequestResponse(request);
+    return this.present(request);
   }
 
   async findOne(actorId: number, id: number) {
     const actor = await this.requireActor(actorId);
     const request = await this.getRequestOrThrow(id, actor.companyId);
     this.assertCanView(actor, request);
-    return this.toRequestResponse(request);
+    return this.present(request);
+  }
+
+  async listApprovals(actorId: number) {
+    const actor = await this.requireActor(actorId);
+    if (!actor.active || !isApprovalReviewer(actor)) {
+      throw new ForbiddenException('You are not allowed to review approvals');
+    }
+    const requests = await this.prisma.request.findMany({
+      where: inboxWhere(actor),
+      include: requestInclude,
+      orderBy: { id: 'asc' },
+    });
+    return {
+      items: await Promise.all(requests.map((request) => this.present(request))),
+    };
+  }
+
+  async decide(actorId: number, id: number, dto: DecideApprovalDto) {
+    const actor = await this.requireActor(actorId);
+    const request = await this.getRequestOrThrow(id, actor.companyId);
+    this.assertCanDecide(actor, request);
+    const reason = dto.decision === 'DENIED' ? requiredDenialReason(dto.reason) : null;
+    const decidedAt = new Date();
+    const outcome =
+      dto.decision === 'APPROVED' ? ApprovalDecisionOutcome.APPROVED : ApprovalDecisionOutcome.DENIED;
+    const nextState = dto.decision === 'APPROVED' ? ApprovalState.APPROVED : ApprovalState.DENIED;
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const updated = await tx.request.updateMany({
+          where: { id, companyId: actor.companyId, approvalState: ApprovalState.PENDING },
+          data: { approvalState: nextState },
+        });
+        if (updated.count !== 1) {
+          throw new ConflictException('This request already has an approval decision');
+        }
+        await tx.approvalDecision.create({
+          data: {
+            companyId: actor.companyId,
+            requestId: id,
+            decision: outcome,
+            reason,
+            approverId: actor.id,
+            approverRole: actor.role,
+            decidedAt,
+          },
+        });
+      });
+    } catch (error) {
+      if (error instanceof ConflictException || !isUniqueConstraint(error)) {
+        throw error;
+      }
+      throw new ConflictException('This request already has an approval decision');
+    }
+
+    const decided = await this.getRequestOrThrow(id, actor.companyId);
+    return this.present(decided);
   }
 
   async getHistory(actorId: number, id: number) {
@@ -93,6 +183,7 @@ export class RequestsService {
     const actor = await this.requireActor(actorId);
     const existing = await this.getRequestOrThrow(id, actor.companyId);
     this.assertCanHandle(actor);
+    this.assertApprovalAllowsHandling(existing);
 
     const owner = await this.ensureEmployee(dto.currentOwnerId, actor.companyId);
     if (owner.role === AccountRole.SUPER_ADMIN) {
@@ -114,13 +205,14 @@ export class RequestsService {
     }
     const request = await this.getRequestOrThrow(id, actor.companyId);
 
-    return this.toRequestResponse(request);
+    return this.present(request);
   }
 
   async transition(actorId: number, id: number, dto: TransitionRequestDto) {
     const actor = await this.requireActor(actorId);
     const request = await this.getRequestOrThrow(id, actor.companyId);
     this.assertCanHandle(actor);
+    this.assertApprovalAllowsHandling(request);
 
     if (dto.changedBy !== actor.id) {
       throw new ForbiddenException('changedBy must match the acting user');
@@ -170,13 +262,20 @@ export class RequestsService {
       }),
     ]);
 
-    return this.toRequestResponse(updated);
+    return this.present(updated);
   }
 
   private async requireActor(actorId: number) {
     const actor = await this.prisma.employee.findUnique({
       where: { id: actorId },
-      select: { id: true, companyId: true, canHandle: true, role: true },
+      select: {
+        id: true,
+        companyId: true,
+        canHandle: true,
+        role: true,
+        departmentId: true,
+        active: true,
+      },
     });
     if (!actor) {
       throw new BadRequestException(`Employee ${actorId} was not found`);
@@ -190,20 +289,57 @@ export class RequestsService {
     }
   }
 
-  private assertCanView(
-    actor: { id: number; canHandle: boolean; role: AccountRole },
-    request: { submittedBy: number },
-  ) {
+  private assertCanView(actor: Actor, request: DecisionRequest) {
     if (actor.role === AccountRole.SUPER_ADMIN) {
-      // Own submissions only. Eligible approval-inbox requests will be added later;
-      // do not restore company-wide Super Admin detail access.
-      if (request.submittedBy !== actor.id) {
-        throw new ForbiddenException('You are not allowed to view this request');
+      if (request.submittedBy === actor.id || canDecideApproval(actor, request)) {
+        return;
       }
+      throw new ForbiddenException('You are not allowed to view this request');
+    }
+    if (canDecideApproval(actor, request)) {
       return;
     }
     if (!actor.canHandle && request.submittedBy !== actor.id) {
       throw new ForbiddenException('You are not allowed to view this request');
+    }
+  }
+
+  private assertCanDecide(actor: Actor, request: DecisionRequest) {
+    if (
+      request.capturedApprovalPolicy == null ||
+      request.capturedApprovalPolicy === ApprovalPolicy.NONE ||
+      request.approvalState == null ||
+      request.approvalState === ApprovalState.NOT_REQUIRED
+    ) {
+      if (!this.canViewWithoutDecision(actor, request)) {
+        throw new ForbiddenException('You are not allowed to decide this request');
+      }
+      throw new ConflictException('This request does not require an approval decision');
+    }
+    if (request.submittedBy === actor.id) {
+      throw new ForbiddenException('You cannot approve or deny your own request');
+    }
+    if (!actor.active || !canDecideApproval(actor, request)) {
+      throw new ForbiddenException('You are not allowed to decide this request');
+    }
+    if (request.approvalState !== ApprovalState.PENDING) {
+      throw new ConflictException('This request already has an approval decision');
+    }
+  }
+
+  private canViewWithoutDecision(actor: Actor, request: DecisionRequest) {
+    if (actor.role === AccountRole.SUPER_ADMIN) {
+      return request.submittedBy === actor.id;
+    }
+    return actor.canHandle || request.submittedBy === actor.id;
+  }
+
+  private assertApprovalAllowsHandling(request: { approvalState: ApprovalState | null }) {
+    if (request.approvalState === ApprovalState.PENDING) {
+      throw new ConflictException('This request is waiting for approval and cannot be handled yet');
+    }
+    if (request.approvalState === ApprovalState.DENIED) {
+      throw new ConflictException('A denied request cannot be handled');
     }
   }
 
@@ -247,6 +383,61 @@ export class RequestsService {
       throw new BadRequestException(`Request type ${id} was not found`);
     }
     return requestType;
+  }
+
+  private async present(
+    request: DecisionRequest & {
+      id: number;
+      requestTypeId: number | null;
+      currentOwnerId: number | null;
+      status: PrismaRequestStatus;
+      statusUpdatedAt: Date;
+      title: string | null;
+      description: string | null;
+      submitter: { id: number; name: string };
+      department: { id: number; name: string };
+      requestType: { id: number; name: string } | null;
+      currentOwner: { id: number; name: string } | null;
+      approvalDecision: {
+        decision: ApprovalDecisionOutcome;
+        reason: string | null;
+        approverId: number;
+        approverRole: AccountRole;
+        decidedAt: Date;
+        approver: { id: number; name: string };
+      } | null;
+    },
+  ) {
+    const noEligibleApprover = await this.noEligibleApprover(request);
+    return {
+      ...this.toRequestResponse(request),
+      approvalState: request.approvalState,
+      noEligibleApprover,
+      approvalNotice: noEligibleApprover ? waitNotice(request.capturedApprovalPolicy) : null,
+      approvalDecision: request.approvalDecision
+        ? {
+            decision: request.approvalDecision.decision,
+            reason: request.approvalDecision.reason,
+            approverId: request.approvalDecision.approverId,
+            approverRole: request.approvalDecision.approverRole,
+            decidedAt: request.approvalDecision.decidedAt.toISOString(),
+            approver: {
+              id: request.approvalDecision.approver.id,
+              name: request.approvalDecision.approver.name,
+            },
+          }
+        : null,
+    };
+  }
+
+  private async noEligibleApprover(request: DecisionRequest) {
+    if (request.approvalState !== ApprovalState.PENDING) {
+      return false;
+    }
+    const count = await this.prisma.employee.count({
+      where: eligibleApproverWhere(request),
+    });
+    return count === 0;
   }
 
   private toRequestResponse(request: {
@@ -298,6 +489,89 @@ export class RequestsService {
         : null,
     };
   }
+}
+
+function initialApprovalState(policy: ApprovalPolicy): ApprovalState {
+  return policy === ApprovalPolicy.NONE ? ApprovalState.NOT_REQUIRED : ApprovalState.PENDING;
+}
+
+function isApprovalReviewer(actor: Actor) {
+  return actor.role === AccountRole.DEPARTMENT_ADMIN || actor.role === AccountRole.SUPER_ADMIN;
+}
+
+function canDecideApproval(actor: Actor, request: DecisionRequest) {
+  if (!actor.active || request.submittedBy === actor.id) {
+    return false;
+  }
+  if (request.capturedApprovalPolicy === ApprovalPolicy.DEPARTMENT_ADMIN) {
+    return (
+      actor.role === AccountRole.DEPARTMENT_ADMIN &&
+      actor.departmentId != null &&
+      actor.departmentId === request.departmentId
+    );
+  }
+  if (request.capturedApprovalPolicy === ApprovalPolicy.SUPER_ADMIN) {
+    return actor.role === AccountRole.SUPER_ADMIN;
+  }
+  return false;
+}
+
+function inboxWhere(actor: Actor) {
+  if (actor.role === AccountRole.SUPER_ADMIN) {
+    return {
+      companyId: actor.companyId,
+      capturedApprovalPolicy: ApprovalPolicy.SUPER_ADMIN,
+      approvalState: ApprovalState.PENDING,
+      submittedBy: { not: actor.id },
+    };
+  }
+  return {
+    companyId: actor.companyId,
+    capturedApprovalPolicy: ApprovalPolicy.DEPARTMENT_ADMIN,
+    approvalState: ApprovalState.PENDING,
+    departmentId: actor.departmentId ?? -1,
+    submittedBy: { not: actor.id },
+  };
+}
+
+function eligibleApproverWhere(request: DecisionRequest) {
+  if (request.capturedApprovalPolicy === ApprovalPolicy.SUPER_ADMIN) {
+    return {
+      companyId: request.companyId,
+      active: true,
+      role: AccountRole.SUPER_ADMIN,
+      id: { not: request.submittedBy },
+    };
+  }
+  return {
+    companyId: request.companyId,
+    active: true,
+    role: AccountRole.DEPARTMENT_ADMIN,
+    departmentId: request.departmentId,
+    id: { not: request.submittedBy },
+  };
+}
+
+function waitNotice(policy: ApprovalPolicy | null) {
+  if (policy === ApprovalPolicy.DEPARTMENT_ADMIN) {
+    return DEPARTMENT_ADMIN_WAIT_NOTICE;
+  }
+  if (policy === ApprovalPolicy.SUPER_ADMIN) {
+    return SUPER_ADMIN_WAIT_NOTICE;
+  }
+  return null;
+}
+
+function requiredDenialReason(reason: string | undefined) {
+  const trimmed = reason?.trim() ?? '';
+  if (trimmed.length === 0) {
+    throw new BadRequestException('Denial requires a reason');
+  }
+  return trimmed;
+}
+
+function isUniqueConstraint(error: unknown) {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2002';
 }
 
 function optionalText(value: string | undefined): string | null {

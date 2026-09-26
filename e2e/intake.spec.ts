@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { cleanRequestData, ensureTestLogins } from './db';
+import { addDevelopmentRequestType, cleanRequestData, countRequests, ensureTestLogins, removeRequestTypes } from './db';
 import { login } from './login';
 
 test.describe('Request intake', () => {
@@ -171,5 +171,83 @@ test.describe('Request intake', () => {
     await expect(page.getByTestId('intake-need-more')).toHaveCount(0);
     await expect(page.getByTestId('intake-suggestions')).toBeVisible();
     await expect(page.getByTestId('request-id')).toHaveCount(0);
+  });
+
+  test('an uncertain request type cannot be submitted until the user selects one', async ({
+    page,
+  }) => {
+    await login(page, 'john@operations-hub.test');
+
+    await page.getByLabel('What do you need?').fill("I can't access the VPN; I need permission.");
+    await page.getByRole('button', { name: 'Analyze' }).click();
+
+    await expect(page.getByTestId('troubleshooting-steps')).toBeVisible();
+    await page.getByRole('button', { name: 'No, still unresolved' }).click();
+    await page.getByRole('button', { name: 'Prepare a request' }).click();
+
+    const draft = page.getByTestId('intake-draft-form');
+    await expect(draft.getByLabel('Request type')).toHaveValue('');
+    await expect(page.getByTestId('intake-type-choice')).toContainText(
+      'Choose a request type before submitting',
+    );
+    await expect(draft.getByRole('button', { name: 'Create Request' })).toBeDisabled();
+    await expect(page.getByTestId('request-id')).toHaveCount(0);
+
+    await draft.getByLabel('Request type').selectOption({ label: 'General' });
+    await expect(draft.getByRole('button', { name: 'Create Request' })).toBeEnabled();
+    await expect(page.getByTestId('request-id')).toHaveCount(0);
+  });
+
+  test('a failing VPN client draft with no type can select IT Software without submitting', async ({
+    page,
+  }) => {
+    const software = await addDevelopmentRequestType('IT', 'Software');
+    try {
+      await login(page, 'john@operations-hub.test');
+      await page.route('**/ai/intake', async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            situation: 'problem',
+            troubleshootingSteps: [
+              'Restart the VPN client.',
+              'Check the network connection.',
+              'Try the connection again.',
+            ],
+            missingInformation: [],
+            suggestions: ['Choose a request type for this failing VPN client.'],
+            draft: {
+              departmentId: software.departmentId,
+              requestTypeId: null,
+              summary: 'VPN client will not connect',
+              description: 'The VPN client will not connect.',
+            },
+          }),
+        });
+      });
+
+      await page.getByLabel('What do you need?').fill('The VPN client will not connect.');
+      await page.getByRole('button', { name: 'Analyze' }).click();
+
+      await expect(page.getByTestId('troubleshooting-steps')).toBeVisible();
+      await page.getByRole('button', { name: 'No, still unresolved' }).click();
+      await page.getByRole('button', { name: 'Prepare a request' }).click();
+
+      const draft = page.getByTestId('intake-draft-form');
+      await expect(draft.getByLabel('Request type')).toHaveValue('');
+      await expect(draft.getByLabel('Request type').locator('option')).toContainText(['Software']);
+      await expect(page.getByTestId('intake-type-choice')).toContainText(
+        'Choose a request type before submitting',
+      );
+      await expect(draft.getByRole('button', { name: 'Create Request' })).toBeDisabled();
+
+      await draft.getByLabel('Request type').selectOption({ label: 'Software' });
+      await expect(draft.getByRole('button', { name: 'Create Request' })).toBeEnabled();
+      await expect(page.getByTestId('request-id')).toHaveCount(0);
+      expect(await countRequests()).toBe(0);
+    } finally {
+      await removeRequestTypes([software.id]);
+    }
   });
 });

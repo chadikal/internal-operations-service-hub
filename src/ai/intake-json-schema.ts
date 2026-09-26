@@ -15,7 +15,7 @@ export const INTAKE_JSON_SCHEMA = {
       type: 'array',
       items: { type: 'string' },
       description:
-        'Details required before a request can be prepared. When this array is not empty, draft must be null. Do not put optional extras here.',
+        'Details required before a request can be prepared. When this array is not empty, draft must be null. Do not put optional extras here. Do not ask the employee to choose a request type here, and do not ask which department when the subject already matches one allowed department.',
     },
     suggestions: {
       type: 'array',
@@ -33,7 +33,11 @@ export const INTAKE_JSON_SCHEMA = {
           additionalProperties: false,
           properties: {
             departmentId: { anyOf: [{ type: 'integer' }, { type: 'null' }] },
-            requestTypeId: { anyOf: [{ type: 'integer' }, { type: 'null' }] },
+            requestTypeId: {
+              anyOf: [{ type: 'integer' }, { type: 'null' }],
+              description:
+                'Id of the one allowed type whose name matches the only intent, or null when the text supports both a new permission and a failing connection, or when no allowed name fits. Do not select a granting-access type only because the text says access or permission while also describing a failure.',
+            },
             summary: { anyOf: [{ type: 'string' }, { type: 'null' }] },
             description: {
               anyOf: [{ type: 'string' }, { type: 'null' }],

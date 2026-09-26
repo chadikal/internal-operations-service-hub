@@ -7,6 +7,7 @@ import {
   cleanRequestData,
   closeTestApp,
   createTestApp,
+  developmentCompanyId,
   HR,
   HR_TYPE,
   IT,
@@ -90,6 +91,82 @@ describe('AI intake evals', () => {
       /purpose|recipient|deadline|format|language/i,
     );
     expect(await countAuthoritativeRows(prisma)).toEqual({ requests: 0, history: 0 });
+  });
+
+  it('clear access intent selects the entitlement type and not a failing connection', async () => {
+    const types = await addNamedTypes(prisma, [
+      { departmentId: IT, name: 'Software' },
+      { departmentId: IT, name: 'Access' },
+      { departmentId: HR, name: 'Access' },
+    ]);
+    try {
+      const vpn = await request(app.getHttpServer())
+        .post('/ai/intake')
+        .set(await authHeaders(app, prisma, JOHN))
+        .send({ text: 'I need permission to use the VPN.' });
+      expect(vpn.status).toBe(200);
+      expect(vpn.body.situation).toBe('need');
+      expect(vpn.body.troubleshootingSteps).toEqual([]);
+      expect(vpn.body.draft.departmentId).toBe(IT);
+      expect(vpn.body.draft.requestTypeId).toBe(types.IT.Access);
+
+      const records = await request(app.getHttpServer())
+        .post('/ai/intake')
+        .set(await authHeaders(app, prisma, JOHN))
+        .send({ text: 'I need permission to view employee records in HR.' });
+      expect(records.status).toBe(200);
+      expect(records.body.situation).toBe('need');
+      expect(records.body.draft.departmentId).toBe(HR);
+      expect(records.body.draft.requestTypeId).toBe(types.HR.Access);
+      expect(await countAuthoritativeRows(prisma)).toEqual({ requests: 0, history: 0 });
+    } finally {
+      await removeNamedTypes(prisma, types.ids);
+    }
+  });
+
+  it('clear malfunction selects the software type for an existing connection', async () => {
+    const types = await addNamedTypes(prisma, [
+      { departmentId: IT, name: 'Software' },
+      { departmentId: IT, name: 'Access' },
+    ]);
+    try {
+      const response = await request(app.getHttpServer())
+        .post('/ai/intake')
+        .set(await authHeaders(app, prisma, JOHN))
+        .send({ text: 'The VPN client will not connect.' });
+      expect(response.status).toBe(200);
+      expect(response.body.situation).toBe('problem');
+      expect(response.body.troubleshootingSteps).toHaveLength(3);
+      expect(response.body.draft.departmentId).toBe(IT);
+      expect(response.body.draft.requestTypeId).toBe(types.IT.Software);
+      expect(await countAuthoritativeRows(prisma)).toEqual({ requests: 0, history: 0 });
+    } finally {
+      await removeNamedTypes(prisma, types.ids);
+    }
+  });
+
+  it('ambiguous access wording keeps troubleshooting and does not preselect a type', async () => {
+    const types = await addNamedTypes(prisma, [
+      { departmentId: IT, name: 'Software' },
+      { departmentId: IT, name: 'Access' },
+    ]);
+    try {
+      const response = await request(app.getHttpServer())
+        .post('/ai/intake')
+        .set(await authHeaders(app, prisma, JOHN))
+        .send({ text: "I can't access the VPN; I need permission." });
+      expect(response.status).toBe(200);
+      expect(response.body.situation).toBe('problem');
+      expect(response.body.troubleshootingSteps.length).toBeGreaterThan(0);
+      expect(response.body.missingInformation).toEqual([]);
+      expect(response.body.draft.departmentId).toBe(IT);
+      expect(response.body.draft.requestTypeId).toBeNull();
+      expect(response.body.draft.summary).toBeTruthy();
+      expect(response.body.suggestions.join(' ')).toMatch(/permission|failing/i);
+      expect(await countAuthoritativeRows(prisma)).toEqual({ requests: 0, history: 0 });
+    } finally {
+      await removeNamedTypes(prisma, types.ids);
+    }
   });
 
   it('4 thin input: does not invent a department or draft details', async () => {
@@ -181,3 +258,40 @@ describe('AI intake evals', () => {
     }
   });
 });
+
+async function addNamedTypes(
+  prisma: PrismaService,
+  rows: Array<{ departmentId: number; name: string }>,
+) {
+  const companyId = await developmentCompanyId(prisma);
+  const created: Array<{ id: number; departmentId: number; name: string }> = [];
+  for (const row of rows) {
+    created.push(
+      await prisma.requestType.create({
+        data: {
+          companyId,
+          departmentId: row.departmentId,
+          name: row.name,
+          approvalPolicy: 'NONE',
+        },
+      }),
+    );
+  }
+  const byDepartment: Record<number, Record<string, number>> = {};
+  for (const row of created) {
+    byDepartment[row.departmentId] = byDepartment[row.departmentId] ?? {};
+    byDepartment[row.departmentId][row.name] = row.id;
+  }
+  return {
+    ids: created.map((row) => row.id),
+    IT: byDepartment[IT] ?? {},
+    HR: byDepartment[HR] ?? {},
+  };
+}
+
+async function removeNamedTypes(prisma: PrismaService, ids: number[]) {
+  if (ids.length === 0) {
+    return;
+  }
+  await prisma.requestType.deleteMany({ where: { id: { in: ids } } });
+}

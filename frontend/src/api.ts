@@ -61,12 +61,27 @@ export type SessionUser = {
   csrfToken: string;
 };
 
+export type ApprovalState = 'NOT_REQUIRED' | 'PENDING' | 'APPROVED' | 'DENIED';
+
+export type ApprovalDecision = {
+  decision: 'APPROVED' | 'DENIED';
+  reason: string | null;
+  approverId: number;
+  approverRole: 'EMPLOYEE' | 'DEPARTMENT_ADMIN' | 'SUPER_ADMIN';
+  decidedAt: string;
+  approver: NamedRef;
+};
+
 export type ServiceRequest = {
   id: number;
   submittedBy: number;
   departmentId: number;
   requestTypeId: number | null;
   capturedApprovalPolicy: ApprovalPolicy | null;
+  approvalState: ApprovalState | null;
+  noEligibleApprover: boolean;
+  approvalNotice: string | null;
+  approvalDecision: ApprovalDecision | null;
   currentOwnerId: number | null;
   status: 'SUBMITTED' | 'IN_PROGRESS' | 'COMPLETED';
   statusUpdatedAt: string;
@@ -449,4 +464,15 @@ export function getCompanyRequests(filters: CompanyRequestFilters = {}) {
   if (filters.pageSize) params.set('pageSize', String(filters.pageSize));
   const query = params.toString();
   return send<CompanyRequestList>(query ? `/admin/requests?${query}` : '/admin/requests');
+}
+
+export function getApprovalInbox() {
+  return send<{ items: ServiceRequest[] }>('/requests/approvals');
+}
+
+export function decideApproval(id: number, decision: 'APPROVED' | 'DENIED', reason?: string) {
+  return send<ServiceRequest>(`/requests/${id}/approval`, {
+    method: 'POST',
+    body: JSON.stringify({ decision, reason }),
+  });
 }

@@ -15,6 +15,7 @@ const PRE_AUTH_MIGRATIONS = [
 const AUTH_MIGRATION = 'prisma/migrations/20260922160000_add_authentication/migration.sql';
 const COMPANY_MIGRATION = 'prisma/migrations/20260924150000_add_company_boundary/migration.sql';
 const REQUEST_TYPES_MIGRATION = 'prisma/migrations/20260925233000_add_request_types/migration.sql';
+const APPROVAL_MIGRATION = 'prisma/migrations/20260926140000_add_approval_decisions/migration.sql';
 
 type SqlRunner = {
   query: (queryText: string, values?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -532,6 +533,24 @@ describe('authentication migration preservation', () => {
         ]);
         const typeCount = await scratch.query(`SELECT COUNT(*)::int AS count FROM "RequestType"`);
         expect(typeCount.rows).toEqual([{ count: 0 }]);
+
+        await queryFile(scratch, APPROVAL_MIGRATION);
+        const afterApproval = await scratch.query(
+          `SELECT id, title, description, "requestTypeId", "capturedApprovalPolicy", "approvalState"
+           FROM "Request" ORDER BY id`,
+        );
+        expect(afterApproval.rows).toEqual([
+          {
+            id: 100,
+            title: 'Keep this title',
+            description: 'Keep this description',
+            requestTypeId: null,
+            capturedApprovalPolicy: null,
+            approvalState: null,
+          },
+        ]);
+        const decisionCount = await scratch.query(`SELECT COUNT(*)::int AS count FROM "ApprovalDecision"`);
+        expect(decisionCount.rows).toEqual([{ count: 0 }]);
       },
     );
   });

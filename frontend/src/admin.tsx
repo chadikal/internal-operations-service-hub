@@ -104,7 +104,7 @@ export function AdminShell({
           <NavLink view="requests" current={view} onNavigate={onNavigate}>
             Requests
           </NavLink>
-          <NavLink view="approvals" current={view} comingLater onNavigate={onNavigate}>
+          <NavLink view="approvals" current={view} onNavigate={onNavigate}>
             Approvals
           </NavLink>
           <NavLink view="settings" current={view} comingLater onNavigate={onNavigate}>
@@ -213,7 +213,7 @@ export function DashboardPage({
     <div>
       <header className="workspace-header">
         <h2>Dashboard</h2>
-        <p className="muted">Counts for this company only. Approvals and top handlers are not implemented.</p>
+        <p className="muted">Counts for this company only. This dashboard does not count approvals. Top handlers are not implemented.</p>
       </header>
       <div className="stat-grid" data-testid="dashboard-counts">
         {cards.map((card) => (

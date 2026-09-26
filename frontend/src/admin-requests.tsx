@@ -14,6 +14,7 @@ import {
   ServiceRequest,
   StaleSessionResult,
 } from './api';
+import { ApprovalFacts } from './approvals';
 import { adminPath } from './routing';
 
 function statusClass(status: ServiceRequest['status']) {
@@ -423,6 +424,7 @@ export function AdminRequestsPage({
                         : '—'}
                 </dd>
               </div>
+              <ApprovalFacts request={detail} />
               <div>
                 <dt>Owner</dt>
                 <dd>{detail.currentOwner ? detail.currentOwner.name : 'Unassigned'}</dd>
@@ -441,8 +443,9 @@ export function AdminRequestsPage({
               </div>
             </dl>
             <p className="muted">
-              Super Admin cannot assign, claim, or change work status. Details and history are
-              shown only for requests you submitted.
+              Approval state is separate from work status. This Requests page opens details and
+              history only for requests you submitted. Unrelated company requests stay on the
+              oversight list. Decisions for requests you are eligible to approve are on Approvals.
             </p>
           </section>
           <section className="card">

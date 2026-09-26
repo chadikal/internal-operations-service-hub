@@ -805,6 +805,15 @@ async function removeExtraAccounts(prisma: PrismaService) {
     });
     await prisma.session.deleteMany({ where: { accountId: { in: ids } } });
     await prisma.requestStatusHistory.deleteMany({ where: { changedBy: { in: ids } } });
+    await prisma.approvalDecision.deleteMany({
+      where: {
+        OR: [
+          { approverId: { in: ids } },
+          { request: { submittedBy: { in: ids } } },
+          { request: { currentOwnerId: { in: ids } } },
+        ],
+      },
+    });
     await prisma.request.deleteMany({
       where: { OR: [{ submittedBy: { in: ids } }, { currentOwnerId: { in: ids } }] },
     });

@@ -1,5 +1,5 @@
 import { InvalidAiOutputError } from './invalid-ai-output.error';
-import { buildSystemPrompt } from './intake-prompt';
+import { buildSystemPrompt, buildUserPrompt } from './intake-prompt';
 import {
   DEFAULT_REQUESTY_MODEL,
   REQUEST_TIMEOUT_MS,
@@ -228,6 +228,26 @@ describe('RequestyAiProvider', () => {
     expect(prompt).toMatch(/suggestions must not set draft to null/);
     expect(prompt).toMatch(/Do not put optional or helpful extras in missingInformation/);
     expect(prompt).toMatch(/Do not invent required information/);
+  });
+
+  it('tells the model to leave the request type empty when the intent is ambiguous', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toMatch(/new permission, account, or entitlement/);
+    expect(prompt).toMatch(/existing application, account, or connection that is failing/);
+    expect(prompt).toMatch(/same distinction in every department/);
+    expect(prompt).toMatch(/Do not assume a company has a type named Access or Software/);
+    expect(prompt).toMatch(/set requestTypeId to null/);
+    expect(prompt).toMatch(/do not treat any type name as an approval rule/);
+    expect(prompt).toMatch(/do not by themselves select a granting-access type/);
+
+    const userPrompt = buildUserPrompt("I can't access the VPN; I need permission.", departments, [
+      { id: 12, name: 'Software', departmentId: 1 },
+      { id: 13, name: 'Access', departmentId: 1 },
+    ]);
+    expect(userPrompt).toMatch(/I need permission to use the VPN/);
+    expect(userPrompt).toMatch(/The VPN client will not connect/);
+    expect(userPrompt).toMatch(/supports both readings/);
+    expect(userPrompt).toMatch(/set requestTypeId to null/);
   });
 
   it('throws on HTTP failure so the service can map it to 503', async () => {

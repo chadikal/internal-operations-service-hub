@@ -163,6 +163,7 @@ export async function closeTestApp(app: INestApplication) {
 }
 
 export async function cleanRequestData(prisma: PrismaService) {
+  await prisma.approvalDecision.deleteMany();
   await prisma.requestStatusHistory.deleteMany();
   await prisma.request.deleteMany();
 }
@@ -192,6 +193,7 @@ export async function removeNonDevelopmentCompanies(prisma: PrismaService) {
   await prisma.invitation.deleteMany({ where: { companyId: { in: companyIds } } });
   await prisma.session.deleteMany({ where: { companyId: { in: companyIds } } });
   await prisma.requestStatusHistory.deleteMany({ where: { companyId: { in: companyIds } } });
+  await prisma.approvalDecision.deleteMany({ where: { companyId: { in: companyIds } } });
   await prisma.request.deleteMany({ where: { companyId: { in: companyIds } } });
   await prisma.requestType.deleteMany({ where: { companyId: { in: companyIds } } });
   await prisma.employee.deleteMany({ where: { companyId: { in: companyIds } } });

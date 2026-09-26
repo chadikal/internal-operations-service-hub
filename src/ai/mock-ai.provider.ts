@@ -78,31 +78,72 @@ export function buildMockIntakeOutput(
       ],
       draft: {
         departmentId: hrId,
-        requestTypeId: requestTypeIdFor(requestTypes, hrId),
+        requestTypeId: typeIdForIntent(requestTypes, hrId, 'certificate'),
         summary: 'Employment certificate',
         description: text,
       },
     };
   }
 
+  const entitlement = hasEntitlementIntent(lower);
+  const failure = hasFailureIntent(lower);
+  const departmentId = departmentIdForText(lower, departments) ?? itId;
+
+  if (entitlement && failure) {
+    return {
+      situation: 'problem',
+      troubleshootingSteps: [
+        'Check whether the account already has permission for this service.',
+        'Retry the connection after signing out and back in.',
+        'Note the exact error so the request can be routed to the right type.',
+      ],
+      missingInformation: [],
+      suggestions: [
+        'Choose whether this is a new permission or account entitlement, or an existing connection that is failing.',
+      ],
+      draft: {
+        departmentId,
+        requestTypeId: null,
+        summary: 'Unclear whether this is a new permission or a failing connection',
+        description: text,
+      },
+    };
+  }
+
+  if (entitlement) {
+    return {
+      situation: 'need',
+      troubleshootingSteps: [],
+      missingInformation: [],
+      suggestions: [],
+      draft: {
+        departmentId,
+        requestTypeId: typeIdForIntent(requestTypes, departmentId, 'entitlement'),
+        summary: 'New permission or account entitlement',
+        description: text,
+      },
+    };
+  }
+
   if (
-    /wi-fi|wifi|won't connect|will not connect|cannot connect|can't connect/.test(
-      lower,
-    )
+    failure &&
+    /wi-fi|wifi|won't connect|will not connect|cannot connect|can't connect|vpn/.test(lower)
   ) {
     return {
       situation: 'problem',
       troubleshootingSteps: [
-        'Turn Wi-Fi off and on again on the laptop.',
-        'Forget the network and reconnect using the company password.',
-        'Restart the laptop and try another known working network if one is available.',
+        'Turn the connection off and on again.',
+        'Sign out and reconnect using the usual account.',
+        'Restart the device and try a known working network if one is available.',
       ],
       missingInformation: [],
       suggestions: [],
       draft: {
-        departmentId: itId,
-        requestTypeId: requestTypeIdFor(requestTypes, itId),
-        summary: 'Laptop cannot connect to Wi-Fi',
+        departmentId,
+        requestTypeId: typeIdForIntent(requestTypes, departmentId, 'malfunction'),
+        summary: /vpn/.test(lower)
+          ? 'Existing VPN connection is failing'
+          : 'Laptop cannot connect to Wi-Fi',
         description: text,
       },
     };
@@ -116,7 +157,7 @@ export function buildMockIntakeOutput(
       suggestions: [],
       draft: {
         departmentId: itId,
-        requestTypeId: requestTypeIdFor(requestTypes, itId),
+        requestTypeId: typeIdForIntent(requestTypes, itId, 'unspecified'),
         summary: 'Laptop request',
         description: text,
       },
@@ -134,15 +175,61 @@ export function buildMockIntakeOutput(
   };
 }
 
-function requestTypeIdFor(
+function hasEntitlementIntent(lower: string): boolean {
+  return /permission|entitlement|grant access|need access|new access/.test(lower);
+}
+
+function hasFailureIntent(lower: string): boolean {
+  return /broken|won't|will not|not working|can't|cannot|issue|problem|connect|wi-fi|wifi|fail/.test(
+    lower,
+  );
+}
+
+function departmentIdForText(
+  lower: string,
+  departments: AiDepartmentContext[],
+): number | null {
+  if (/\bhr\b|human resources|certificate/.test(lower)) {
+    return departmentIdByName(departments, 'HR');
+  }
+  if (/finance/.test(lower)) {
+    return departmentIdByName(departments, 'Finance');
+  }
+  if (/vpn|laptop|computer|software|wi-fi|wifi/.test(lower)) {
+    return departmentIdByName(departments, 'IT');
+  }
+  return null;
+}
+
+function typeIdForIntent(
   requestTypes: AiRequestTypeContext[],
   departmentId: number | null,
+  intent: 'entitlement' | 'malfunction' | 'certificate' | 'unspecified',
 ): number | null {
   if (departmentId == null) {
     return null;
   }
-  const match = requestTypes.find((item) => item.departmentId === departmentId);
-  return match ? match.id : null;
+  const inDepartment = requestTypes.filter((item) => item.departmentId === departmentId);
+  if (inDepartment.length === 0) {
+    return null;
+  }
+  if (intent === 'unspecified') {
+    return inDepartment.length === 1 ? inDepartment[0].id : null;
+  }
+  const pattern =
+    intent === 'entitlement'
+      ? /access|permission|entitlement/i
+      : intent === 'malfunction'
+        ? /software|application|malfunction/i
+        : /certificate/i;
+  const named = inDepartment.filter((item) => pattern.test(item.name));
+  if (named.length === 1) {
+    return named[0].id;
+  }
+  if (named.length > 1) {
+    return null;
+  }
+  return inDepartment.length === 1 ? inDepartment[0].id : null;
 }
 
 function departmentIdByName(

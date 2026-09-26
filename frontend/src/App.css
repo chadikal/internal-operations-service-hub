@@ -572,6 +572,15 @@ button:disabled {
   background: #eef4f8;
 }
 
+.approval-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 @media (max-width: 800px) {
   .admin-shell {
     grid-template-columns: 1fr;

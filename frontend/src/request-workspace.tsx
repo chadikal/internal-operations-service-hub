@@ -9,6 +9,7 @@ import {
   ServiceRequest,
   SessionUser,
 } from './api';
+import { ApprovalFacts } from './approvals';
 
 export type IntakeStep = 'input' | 'troubleshoot' | 'offer' | 'draft' | 'resolved' | 'declined';
 
@@ -189,6 +190,8 @@ export function RequestWorkspace({
   showDetails?: boolean;
 }) {
   const canHandle = user.canHandle === true;
+  const approvalBlocksHandling =
+    request?.approvalState === 'PENDING' || request?.approvalState === 'DENIED';
   const eligibleOwners = employees.filter(
     (employee) =>
       employee.canHandle === true &&
@@ -319,9 +322,10 @@ export function RequestWorkspace({
         ) : null}
 
         {intakeStep === 'draft' ? (
-          <form className="stack" onSubmit={onCreate}>
+          <form className="stack" data-testid="intake-draft-form" onSubmit={onCreate}>
             <p className="muted">
               Review and edit this draft. Create Request uses the normal request submission flow.
+              The saved request type still supplies the approval policy.
             </p>
             <DepartmentAndTypeFields
               departments={departments}
@@ -331,6 +335,11 @@ export function RequestWorkspace({
               requestTypeId={requestTypeId}
               setRequestTypeId={setRequestTypeId}
             />
+            {requestTypeId === '' ? (
+              <p className="muted" data-testid="intake-type-choice">
+                Choose a request type before submitting. The assistant did not select one.
+              </p>
+            ) : null}
             <label>
               Title
               <input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={200} />
@@ -445,6 +454,7 @@ export function RequestWorkspace({
                 <dt>Approval policy</dt>
                 <dd>{policyLabel(request.capturedApprovalPolicy)}</dd>
               </div>
+              <ApprovalFacts request={request} />
               <div>
                 <dt>Owner</dt>
                 <dd>{request.currentOwner ? request.currentOwner.name : 'Unassigned'}</dd>
@@ -463,7 +473,15 @@ export function RequestWorkspace({
               </div>
             </dl>
 
-            {canHandle ? (
+            {canHandle && approvalBlocksHandling ? (
+              <p className="muted">
+                {request.approvalState === 'DENIED'
+                  ? 'A denied request cannot be handled. Work status stays unchanged.'
+                  : 'This request is waiting for approval and cannot be handled yet.'}
+              </p>
+            ) : null}
+
+            {canHandle && !approvalBlocksHandling ? (
               <>
                 {request.status !== 'COMPLETED' ? (
                   eligibleOwners.length === 0 ? (
