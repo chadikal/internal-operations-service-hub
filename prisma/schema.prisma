@@ -24,12 +24,19 @@ enum CompanyStatus {
   ACTIVE
 }
 
+enum ApprovalPolicy {
+  NONE
+  DEPARTMENT_ADMIN
+  SUPER_ADMIN
+}
+
 model Company {
   id                 Int                 @id @default(autoincrement())
   name               String
   status             CompanyStatus       @default(PENDING)
   createdAt          DateTime            @default(now())
   departments        Department[]
+  requestTypes       RequestType[]
   employees          Employee[]
   requests           Request[]
   statusHistory      RequestStatusHistory[]
@@ -39,14 +46,29 @@ model Company {
 }
 
 model Department {
-  id        Int        @id @default(autoincrement())
-  name      String
-  companyId Int
-  company   Company    @relation(fields: [companyId], references: [id])
-  employees Employee[]
-  requests  Request[]
+  id           Int           @id @default(autoincrement())
+  name         String
+  companyId    Int
+  company      Company       @relation(fields: [companyId], references: [id])
+  employees    Employee[]
+  requestTypes RequestType[]
+  requests     Request[]
 
   @@index([companyId])
+}
+
+model RequestType {
+  id             Int            @id @default(autoincrement())
+  companyId      Int
+  departmentId   Int
+  name           String
+  approvalPolicy ApprovalPolicy
+  company        Company        @relation(fields: [companyId], references: [id])
+  department     Department     @relation(fields: [departmentId], references: [id])
+  requests       Request[]
+
+  @@index([companyId])
+  @@index([departmentId])
 }
 
 model Employee {
@@ -88,20 +110,23 @@ model Session {
 }
 
 model Request {
-  id              Int                    @id @default(autoincrement())
-  companyId       Int
-  submittedBy     Int
-  departmentId    Int
-  currentOwnerId  Int?
-  status          RequestStatus          @default(SUBMITTED)
-  statusUpdatedAt DateTime
-  title           String?
-  description     String?
-  company         Company                @relation(fields: [companyId], references: [id])
-  submitter       Employee               @relation("RequestSubmitter", fields: [submittedBy], references: [id])
-  department      Department             @relation(fields: [departmentId], references: [id])
-  currentOwner    Employee?              @relation("RequestOwner", fields: [currentOwnerId], references: [id])
-  history         RequestStatusHistory[]
+  id                      Int                    @id @default(autoincrement())
+  companyId               Int
+  submittedBy             Int
+  departmentId            Int
+  requestTypeId           Int?
+  capturedApprovalPolicy  ApprovalPolicy?
+  currentOwnerId          Int?
+  status                  RequestStatus          @default(SUBMITTED)
+  statusUpdatedAt         DateTime
+  title                   String?
+  description             String?
+  company                 Company                @relation(fields: [companyId], references: [id])
+  submitter               Employee               @relation("RequestSubmitter", fields: [submittedBy], references: [id])
+  department              Department             @relation(fields: [departmentId], references: [id])
+  requestType             RequestType?           @relation(fields: [requestTypeId], references: [id])
+  currentOwner            Employee?              @relation("RequestOwner", fields: [currentOwnerId], references: [id])
+  history                 RequestStatusHistory[]
 
   @@index([companyId])
 }

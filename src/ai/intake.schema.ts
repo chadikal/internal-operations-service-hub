@@ -4,6 +4,7 @@ export type IntakeSituation = 'problem' | 'need';
 
 export type IntakeDraft = {
   departmentId: number | null;
+  requestTypeId: number | null;
   summary: string | null;
   description: string | null;
 };
@@ -24,7 +25,7 @@ const RESULT_KEYS = new Set([
   'draft',
 ]);
 
-const DRAFT_KEYS = new Set(['departmentId', 'summary', 'description']);
+const DRAFT_KEYS = new Set(['departmentId', 'requestTypeId', 'summary', 'description']);
 
 const MAX_STEPS = 3;
 const MAX_STEP_LENGTH = 300;
@@ -102,10 +103,16 @@ export function isInsufficientEmployeeText(text: string): boolean {
   return words.length === 0 || words.every((word) => GENERIC_INTAKE_WORDS.has(word));
 }
 
+export type AllowedRequestType = {
+  id: number;
+  departmentId: number;
+};
+
 export function validateIntakeResult(
   raw: unknown,
   allowedDepartmentIds: Set<number>,
   employeeText?: string,
+  allowedRequestTypes: AllowedRequestType[] = [],
 ): IntakeResult {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new InvalidAiOutputError('Provider output must be an object');
@@ -146,7 +153,7 @@ export function validateIntakeResult(
     troubleshootingSteps = [];
   }
 
-  const draft = parseDraft(obj.draft, allowedDepartmentIds, missingInformation);
+  const draft = parseDraft(obj.draft, allowedDepartmentIds, allowedRequestTypes, missingInformation);
 
   return sanitizeUnactionableResult(
     situation,
@@ -194,6 +201,7 @@ function sanitizeUnactionableResult(
 function parseDraft(
   value: unknown,
   allowedDepartmentIds: Set<number>,
+  allowedRequestTypes: AllowedRequestType[],
   missingInformation: string[],
 ): IntakeDraft | null {
   if (value === undefined || value === null) {
@@ -231,8 +239,33 @@ function parseDraft(
     }
   }
 
+  let requestTypeId: number | null = null;
+  if (draft.requestTypeId !== undefined && draft.requestTypeId !== null) {
+    if (
+      typeof draft.requestTypeId !== 'number' ||
+      !Number.isInteger(draft.requestTypeId) ||
+      draft.requestTypeId < 1
+    ) {
+      throw new InvalidAiOutputError('draft.requestTypeId must be a positive integer or null');
+    }
+    requestTypeId = draft.requestTypeId;
+  }
+
+  const allowedType = allowedRequestTypes.find((item) => item.id === requestTypeId);
+  if (
+    requestTypeId !== null &&
+    (allowedType == null || (departmentId != null && allowedType.departmentId !== departmentId))
+  ) {
+    requestTypeId = null;
+    const message = 'A valid request type could not be determined from the allowed types.';
+    if (!missingInformation.includes(message)) {
+      missingInformation.push(message);
+    }
+  }
+
   return {
     departmentId,
+    requestTypeId,
     summary: optionalBoundedString(draft.summary, 'draft.summary', MAX_SUMMARY_LENGTH),
     description: optionalBoundedString(
       draft.description,

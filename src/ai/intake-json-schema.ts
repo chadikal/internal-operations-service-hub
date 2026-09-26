@@ -33,6 +33,7 @@ export const INTAKE_JSON_SCHEMA = {
           additionalProperties: false,
           properties: {
             departmentId: { anyOf: [{ type: 'integer' }, { type: 'null' }] },
+            requestTypeId: { anyOf: [{ type: 'integer' }, { type: 'null' }] },
             summary: { anyOf: [{ type: 'string' }, { type: 'null' }] },
             description: {
               anyOf: [{ type: 'string' }, { type: 'null' }],
@@ -40,7 +41,7 @@ export const INTAKE_JSON_SCHEMA = {
                 'First-person text the employee will submit, such as "I need a certificate from HR". Preserve their meaning and details. Do not invent missing information or write in the third person.',
             },
           },
-          required: ['departmentId', 'summary', 'description'],
+          required: ['departmentId', 'requestTypeId', 'summary', 'description'],
         },
       ],
     },

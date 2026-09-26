@@ -1,5 +1,7 @@
 # Week 2 Agentic Workflow
 
+This is a historical Week 2 delivery record. Current product rules (identity, Super Admin visibility, departments, approval policy) are in `docs/product-spec.md`. Later decisions do not rewrite this note.
+
 Bounded Service Request lifecycle slice for the Internal Operations Service Hub.
 
 ## UNDERSTAND

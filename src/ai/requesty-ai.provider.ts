@@ -1,15 +1,16 @@
+import { Logger } from '@nestjs/common';
 import { AiProvider, AiProviderInput } from './ai-provider';
 import { INTAKE_JSON_SCHEMA } from './intake-json-schema';
 import { buildSystemPrompt, buildUserPrompt } from './intake-prompt';
 import { InvalidAiOutputError } from './invalid-ai-output.error';
 
-export const DEFAULT_REQUESTY_MODEL = 'gemma-4-31b-it';
+export const DEFAULT_REQUESTY_MODEL = 'mistral/leanstral-1-5';
 export const REQUESTY_CHAT_COMPLETIONS_URL =
   'https://router.requesty.ai/v1/chat/completions';
 
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 400;
-const REQUEST_TIMEOUT_MS = 30_000;
+export const REQUEST_TIMEOUT_MS = 90_000;
 
 const MAX_UPSTREAM_ERROR_LENGTH = 500;
 
@@ -28,6 +29,8 @@ type RequestyFetch = (
 ) => Promise<RequestyResponse>;
 
 export class RequestyAiProvider implements AiProvider {
+  private readonly logger = new Logger(RequestyAiProvider.name);
+
   constructor(private readonly fetchImpl: RequestyFetch = fetch as RequestyFetch) {}
 
   async complete(input: AiProviderInput): Promise<unknown> {
@@ -41,10 +44,9 @@ export class RequestyAiProvider implements AiProvider {
       model,
       messages: [
         { role: 'system', content: buildSystemPrompt() },
-        { role: 'user', content: buildUserPrompt(input.employeeText, input.departments) },
+        { role: 'user', content: buildUserPrompt(input.employeeText, input.departments, input.requestTypes) },
       ],
-      max_tokens: 1024,
-      temperature: 0,
+      max_tokens: 4096,
       response_format: {
         type: 'json_schema',
         json_schema: {
@@ -54,20 +56,39 @@ export class RequestyAiProvider implements AiProvider {
       },
     });
 
-    const response = await this.requestWithRetry(apiKey, body);
-    const payload = await response.json();
+    const outcome = await this.requestWithRetry(apiKey, body, model);
+    const payload = await outcome.response.json();
     const text = extractAssistantContent(payload);
+    const facts = attemptFacts(model, outcome.attempt, outcome.elapsedMs, outcome.response.status);
     if (text === null) {
-      throw new InvalidAiOutputError('Requesty returned no JSON text');
+      throw new InvalidAiOutputError(`Requesty returned no JSON text${facts} contentKind=empty`);
     }
-    return parseJsonText(text);
+    try {
+      const parsed = parseJsonText(text);
+      this.logIntake(
+        `Requesty intake completed${facts} finishReason=${finishReason(payload)} completionTokens=${completionTokens(payload)}`,
+      );
+      return parsed;
+    } catch (error) {
+      if (error instanceof InvalidAiOutputError) {
+        throw new InvalidAiOutputError(
+          `${error.message}${facts} contentKind=${contentKind(text)} contentLength=${text.length}`,
+        );
+      }
+      throw error;
+    }
   }
 
-  private async requestWithRetry(apiKey: string, body: string): Promise<RequestyResponse> {
+  private async requestWithRetry(
+    apiKey: string,
+    body: string,
+    model: string,
+  ): Promise<{ response: RequestyResponse; attempt: number; elapsedMs: number }> {
     let lastError: Error | null = null;
     const earlier: string[] = [];
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const started = Date.now();
       try {
         const response = await this.fetchImpl(REQUESTY_CHAT_COMPLETIONS_URL, {
           method: 'POST',
@@ -78,11 +99,19 @@ export class RequestyAiProvider implements AiProvider {
           body,
           signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });
+        const elapsedMs = Date.now() - started;
         if (response.ok) {
-          return response;
+          return { response, attempt, elapsedMs };
         }
         const failure = new Error(
-          formatHttpFailure(response.status, await readUpstreamDetail(response), attempt, earlier),
+          formatHttpFailure(
+            response.status,
+            await readUpstreamDetail(response),
+            attempt,
+            earlier,
+            model,
+            elapsedMs,
+          ),
         );
         if (!isRetryableStatus(response.status) || attempt === MAX_ATTEMPTS) {
           throw failure;
@@ -90,13 +119,14 @@ export class RequestyAiProvider implements AiProvider {
         earlier.push(String(response.status));
         lastError = failure;
       } catch (error) {
+        const elapsedMs = Date.now() - started;
         if (error instanceof InvalidAiOutputError || isUpstreamHttpFailure(error)) {
           throw error;
         }
         if (isTimeoutError(error)) {
-          throw new Error(formatTimeoutFailure(error, attempt, earlier));
+          throw new Error(formatTimeoutFailure(error, attempt, earlier, model, elapsedMs));
         }
-        lastError = new Error(formatNetworkFailure(error, attempt, earlier));
+        lastError = new Error(formatNetworkFailure(error, attempt, earlier, model, elapsedMs));
         if (attempt === MAX_ATTEMPTS) {
           throw lastError;
         }
@@ -106,6 +136,13 @@ export class RequestyAiProvider implements AiProvider {
     }
 
     throw lastError ?? new Error('Requesty request failed');
+  }
+
+  private logIntake(line: string) {
+    if (process.env.JEST_WORKER_ID !== undefined) {
+      return;
+    }
+    this.logger.log(line);
   }
 }
 
@@ -132,16 +169,73 @@ function formatHttpFailure(
   detail: string,
   attempt: number,
   earlier: string[],
+  model: string,
+  elapsedMs: number,
 ): string {
-  return `Requesty request failed with status ${status} on attempt ${attempt}: ${detail}${earlierSuffix(earlier)}`;
+  return `Requesty request failed with status ${status} on attempt ${attempt}: ${detail}${earlierSuffix(earlier)}${attemptFacts(model, attempt, elapsedMs, status)}`;
 }
 
-function formatTimeoutFailure(error: unknown, attempt: number, earlier: string[]): string {
-  return `Requesty request timed out (${errorLabel(error, 'TimeoutError')}) on attempt ${attempt}${earlierSuffix(earlier)}`;
+function formatTimeoutFailure(
+  error: unknown,
+  attempt: number,
+  earlier: string[],
+  model: string,
+  elapsedMs: number,
+): string {
+  return `Requesty request timed out (${errorLabel(error, 'TimeoutError')}) on attempt ${attempt}${earlierSuffix(earlier)}${attemptFacts(model, attempt, elapsedMs, 'none')}`;
 }
 
-function formatNetworkFailure(error: unknown, attempt: number, earlier: string[]): string {
-  return `Requesty request failed (${errorLabel(error, 'Error')}) on attempt ${attempt}${earlierSuffix(earlier)}`;
+function formatNetworkFailure(
+  error: unknown,
+  attempt: number,
+  earlier: string[],
+  model: string,
+  elapsedMs: number,
+): string {
+  return `Requesty request failed (${errorLabel(error, 'Error')}) on attempt ${attempt}${earlierSuffix(earlier)}${attemptFacts(model, attempt, elapsedMs, 'none')}`;
+}
+
+function attemptFacts(
+  model: string,
+  attempt: number,
+  elapsedMs: number,
+  httpStatus: number | 'none',
+): string {
+  return ` model=${model} attempt=${attempt} elapsedMs=${elapsedMs} httpStatus=${httpStatus} timeoutMs=${REQUEST_TIMEOUT_MS}`;
+}
+
+function finishReason(payload: unknown): string {
+  if (payload === null || typeof payload !== 'object') {
+    return 'none';
+  }
+  const choices = (payload as { choices?: unknown }).choices;
+  if (!Array.isArray(choices) || choices.length === 0) {
+    return 'none';
+  }
+  const reason = (choices[0] as { finish_reason?: unknown }).finish_reason;
+  return typeof reason === 'string' && reason.trim() ? reason.trim() : 'none';
+}
+
+function completionTokens(payload: unknown): number | 'none' {
+  if (payload === null || typeof payload !== 'object') {
+    return 'none';
+  }
+  const usage = (payload as { usage?: { completion_tokens?: unknown } }).usage;
+  return typeof usage?.completion_tokens === 'number' ? usage.completion_tokens : 'none';
+}
+
+function contentKind(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.startsWith('{')) {
+    return 'json-object';
+  }
+  if (trimmed.startsWith('```')) {
+    return 'fenced';
+  }
+  if (/^<think>/i.test(trimmed)) {
+    return 'think-tag';
+  }
+  return 'other';
 }
 
 function earlierSuffix(earlier: string[]): string {
@@ -253,8 +347,29 @@ function extractAssistantContent(payload: unknown): string | null {
   if (!Array.isArray(choices) || choices.length === 0) {
     return null;
   }
-  const message = (choices[0] as { message?: { content?: unknown } }).message;
-  const content = message?.content;
+  const message = (choices[0] as { message?: Record<string, unknown> }).message;
+  if (!message || typeof message !== 'object') {
+    return null;
+  }
+
+  const fromContent = contentToText(message.content);
+  if (fromContent) {
+    return fromContent;
+  }
+  if (typeof message.reasoning === 'string' && message.reasoning.trim()) {
+    return message.reasoning.trim();
+  }
+  if (message.parsed !== null && typeof message.parsed === 'object') {
+    try {
+      return JSON.stringify(message.parsed);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function contentToText(content: unknown): string | null {
   if (typeof content === 'string') {
     const trimmed = content.trim();
     return trimmed.length > 0 ? trimmed : null;
@@ -276,22 +391,95 @@ function extractAssistantContent(payload: unknown): string | null {
 }
 
 function parseJsonText(text: string): unknown {
-  const stripped = text
-    .trim()
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/, '');
+  const prepared = prepareJsonText(text);
   try {
-    return JSON.parse(stripped);
+    return JSON.parse(prepared);
   } catch {
-    const start = stripped.indexOf('{');
-    const end = stripped.lastIndexOf('}');
-    if (start >= 0 && end > start) {
-      try {
-        return JSON.parse(stripped.slice(start, end + 1));
-      } catch {
-        // The surrounding text is not a JSON object either.
-      }
+    const objects = extractJsonObjects(prepared);
+    const intake = [...objects].reverse().find(isIntakeShaped);
+    if (intake !== undefined) {
+      return intake;
+    }
+    if (objects.length > 0) {
+      return objects[objects.length - 1];
     }
     throw new InvalidAiOutputError('Requesty returned malformed JSON');
   }
+}
+
+function prepareJsonText(text: string): string {
+  return text
+    .trim()
+    .replace(/<think>[\s\S]*?<\/think>/gi, ' ')
+    .replace(/<thought>[\s\S]*?<\/thought>/gi, ' ')
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '')
+    .trim();
+}
+
+function isIntakeShaped(value: unknown): boolean {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    'situation' in value
+  );
+}
+
+function extractJsonObjects(text: string): unknown[] {
+  const objects: unknown[] = [];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== '{') {
+      continue;
+    }
+    const parsed = parseBalancedObject(text, i);
+    if (parsed !== undefined) {
+      objects.push(parsed.value);
+      i = parsed.endIndex;
+    }
+  }
+  return objects;
+}
+
+function parseBalancedObject(
+  text: string,
+  start: number,
+): { value: unknown; endIndex: number } | undefined {
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (ch === '\\') {
+        escape = true;
+        continue;
+      }
+      if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === '{') {
+      depth += 1;
+    } else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          return { value: JSON.parse(text.slice(start, i + 1)), endIndex: i };
+        } catch {
+          return undefined;
+        }
+      }
+    }
+  }
+  return undefined;
 }

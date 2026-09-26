@@ -8,6 +8,7 @@ import {
   closeTestApp,
   createTestApp,
   IT,
+  IT_TYPE,
   JOHN,
 } from './test-helpers';
 
@@ -35,7 +36,7 @@ describe('Request lifecycle safety', () => {
     const created = await request(app.getHttpServer())
       .post('/requests')
       .set(await authHeaders(app, prisma, JOHN))
-      .send({ submittedBy: JOHN, departmentId: IT });
+      .send({ submittedBy: JOHN, departmentId: IT, requestTypeId: IT_TYPE });
     expect(created.status).toBe(201);
     const id = created.body.id as number;
 
@@ -76,7 +77,7 @@ describe('Request lifecycle safety', () => {
     const created = await request(app.getHttpServer())
       .post('/requests')
       .set(await authHeaders(app, prisma, JOHN))
-      .send({ submittedBy: JOHN, departmentId: IT });
+      .send({ submittedBy: JOHN, departmentId: IT, requestTypeId: IT_TYPE });
     expect(created.status).toBe(201);
     const id = created.body.id as number;
 

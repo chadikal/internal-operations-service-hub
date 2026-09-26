@@ -1,5 +1,7 @@
 # Week 4 Production AI — Request Intake
 
+This is a historical Week 4 delivery record. Current product rules (identity, Super Admin visibility, departments, approval policy, and that AI never decides company policy) are in `docs/product-spec.md`. Later decisions do not rewrite this note.
+
 Advisory request intake for the Internal Operations Service Hub. The model may suggest troubleshooting and a draft. It cannot create or mutate a request.
 
 ## Capability

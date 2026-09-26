@@ -24,6 +24,7 @@ import {
   ensureTestCredentials,
   removeNonDevelopmentCompanies,
   IT,
+  IT_TYPE,
   JOHN,
   JOHN_EMAIL,
   sessionCookieFrom,
@@ -191,7 +192,7 @@ describe('authentication', () => {
     const created = await request(app.getHttpServer())
       .post('/requests')
       .set(headers)
-      .send({ submittedBy: JOHN, departmentId: IT });
+      .send({ submittedBy: JOHN, departmentId: IT, requestTypeId: IT_TYPE });
     expect(created.status).toBe(201);
     const afterWrite = await prisma.session.findUniqueOrThrow({ where: { id: session.id } });
     expect(afterWrite.lastActivityAt.getTime()).toBeGreaterThan(stale.getTime() + 60_000);
@@ -226,7 +227,7 @@ describe('authentication', () => {
     const missing = await request(app.getHttpServer())
       .post('/requests')
       .set('Cookie', cookie)
-      .send({ submittedBy: JOHN, departmentId: IT });
+      .send({ submittedBy: JOHN, departmentId: IT, requestTypeId: IT_TYPE });
     expect(missing.status).toBe(403);
     expect(await prisma.request.count()).toBe(0);
 
@@ -466,7 +467,7 @@ describe('authentication', () => {
       .post('/requests')
       .set(johnHeaders)
       .set('X-Actor-Id', String(CHADI))
-      .send({ submittedBy: JOHN, departmentId: IT });
+      .send({ submittedBy: JOHN, departmentId: IT, requestTypeId: IT_TYPE });
     expect(requestRow.status).toBe(201);
     expect(requestRow.body.submittedBy).toBe(JOHN);
     assertNoCredentialFields(requestRow.body, []);
@@ -536,7 +537,7 @@ describe('authentication', () => {
       const created = await request(app.getHttpServer())
         .post('/requests')
         .set(headers)
-        .send({ submittedBy: JOHN, departmentId: IT, title: 'Saved despite activity failure' });
+        .send({ submittedBy: JOHN, departmentId: IT, requestTypeId: IT_TYPE, title: 'Saved despite activity failure' });
       expect(created.status).toBe(201);
       expect(created.body.title).toBe('Saved despite activity failure');
       expect(logged).toHaveBeenCalledWith('Session activity was not recorded.');
@@ -576,7 +577,7 @@ describe('authentication', () => {
     const created = await request(app.getHttpServer())
       .post('/requests')
       .set(headers)
-      .send({ submittedBy: JOHN, departmentId: IT });
+      .send({ submittedBy: JOHN, departmentId: IT, requestTypeId: IT_TYPE });
     expect(created.body.submittedBy).toBe(JOHN);
     expect(created.body.submitter).toEqual({ id: JOHN, name: 'John' });
   });

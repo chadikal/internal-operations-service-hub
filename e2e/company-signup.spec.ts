@@ -39,10 +39,17 @@ test.describe('Company signup', () => {
     await page.getByLabel('Password').fill(TEST_PASSWORD);
     await page.getByRole('button', { name: 'Log in' }).click();
     await expect(page.getByTestId('signed-in-name')).toContainText('Ada Founder');
+    await expect(page.getByRole('navigation', { name: 'Super Admin' })).toBeVisible();
+    await page.getByRole('navigation', { name: 'Super Admin' }).getByRole('link', { name: 'Departments' }).click();
+    await expect(page.getByTestId('department-list')).toContainText('IT');
+    await expect(page.getByTestId('department-list')).toContainText('HR');
+    await expect(page.getByTestId('department-list')).toContainText('Finance');
     await page.getByLabel('Department name').fill('People Ops');
     await page.getByRole('button', { name: 'Add department' }).click();
     await expect(page.getByText('Department added.')).toBeVisible();
+    await expect(page.getByTestId('department-list')).toContainText('People Ops');
 
+    await page.getByRole('navigation', { name: 'Super Admin' }).getByRole('link', { name: 'Employees' }).click();
     await page.getByLabel('Staff name').fill('Sam Staff');
     await page.getByLabel('Staff email').fill(staffEmail);
     await page.getByLabel('Staff department').selectOption({ label: 'People Ops' });

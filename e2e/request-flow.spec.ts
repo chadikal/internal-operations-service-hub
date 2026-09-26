@@ -17,6 +17,7 @@ test.describe('Service request user journey', () => {
     await expect(page.getByTestId('signed-in-name')).toContainText('John');
 
     await page.getByLabel('Department').selectOption({ label: 'IT' });
+    await page.getByLabel('Request type').selectOption({ label: 'General' });
     await page.getByRole('button', { name: 'Create Request' }).click();
 
     await expect(page.getByTestId('request-status')).toHaveText('SUBMITTED');

@@ -1,5 +1,7 @@
 # Week 3 Full-Stack Delivery
 
+This is a historical Week 3 delivery record. Current product rules (identity, Super Admin visibility, departments, approval policy) are in `docs/product-spec.md`. Later decisions do not rewrite this note.
+
 ## 1. Slice Delivered
 
 This Week 3 slice is one user-facing Service Request flow:

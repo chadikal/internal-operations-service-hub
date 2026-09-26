@@ -5,9 +5,16 @@ export type AiDepartmentContext = {
   name: string;
 };
 
+export type AiRequestTypeContext = {
+  id: number;
+  name: string;
+  departmentId: number;
+};
+
 export type AiProviderInput = {
   employeeText: string;
   departments: AiDepartmentContext[];
+  requestTypes: AiRequestTypeContext[];
 };
 
 export interface AiProvider {

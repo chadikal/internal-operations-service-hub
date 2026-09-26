@@ -2,6 +2,7 @@ import { InvalidAiOutputError } from './invalid-ai-output.error';
 import { buildSystemPrompt } from './intake-prompt';
 import {
   DEFAULT_REQUESTY_MODEL,
+  REQUEST_TIMEOUT_MS,
   REQUESTY_CHAT_COMPLETIONS_URL,
   RequestyAiProvider,
 } from './requesty-ai.provider';
@@ -52,7 +53,7 @@ describe('RequestyAiProvider', () => {
     const provider = new RequestyAiProvider(fetchImpl);
 
     await expect(
-      provider.complete({ employeeText: 'I need a laptop.', departments }),
+      provider.complete({ employeeText: 'I need a laptop.', departments, requestTypes: [] }),
     ).rejects.toThrow('Requesty is not configured');
     expect(fetchImpl).not.toHaveBeenCalled();
   });
@@ -68,6 +69,7 @@ describe('RequestyAiProvider', () => {
     const result = await provider.complete({
       employeeText: 'I need a laptop.',
       departments,
+      requestTypes: [{ id: 9, name: 'Hardware', departmentId: 1 }],
     });
 
     expect(result).toEqual(intakeJson);
@@ -82,6 +84,7 @@ describe('RequestyAiProvider', () => {
     expect(init.headers['Content-Type']).toBe('application/json');
     const body = JSON.parse(init.body) as {
       model: string;
+      temperature?: number;
       messages: Array<{ role: string; content: string }>;
       response_format: {
         type: string;
@@ -89,9 +92,13 @@ describe('RequestyAiProvider', () => {
       };
     };
     expect(body.model).toBe(DEFAULT_REQUESTY_MODEL);
+    expect(body.temperature).toBeUndefined();
     expect(body.messages[0]?.role).toBe('system');
     expect(body.messages[1]?.role).toBe('user');
     expect(body.messages[1]?.content).toContain('I need a laptop.');
+    expect(body.messages[0]?.content).toMatch(/never choose or mention approval policy/i);
+    expect(body.messages[1]?.content).toContain('Hardware');
+    expect(body.messages[1]?.content).not.toContain('approvalPolicy');
     expect(body.response_format.type).toBe('json_schema');
     expect(body.response_format.json_schema.name).toBe('intake_result');
     expect(body.response_format.json_schema.schema.required).toEqual([
@@ -111,7 +118,7 @@ describe('RequestyAiProvider', () => {
       .mockResolvedValue(jsonResponse(chatCompletion('{"situation":"need"}')));
     const provider = new RequestyAiProvider(fetchImpl);
 
-    await provider.complete({ employeeText: 'I need a laptop.', departments });
+    await provider.complete({ employeeText: 'I need a laptop.', departments, requestTypes: [] });
 
     const [, init] = fetchImpl.mock.calls[0] as [string, { body: string }];
     expect(JSON.parse(init.body).model).toBe('custom-requesty-model');
@@ -126,28 +133,72 @@ describe('RequestyAiProvider', () => {
     const provider = new RequestyAiProvider(fetchImpl);
 
     try {
-      await expect(
-        provider.complete({ employeeText: 'I need a laptop.', departments }),
-      ).rejects.toThrow(
+      let caughtMessage = '';
+      try {
+        await provider.complete({ employeeText: 'I need a laptop.', departments, requestTypes: [] });
+      } catch (error) {
+        caughtMessage = error instanceof Error ? error.message : '';
+        if (!(error instanceof Error) || error instanceof InvalidAiOutputError) {
+          throw error;
+        }
+      }
+      expect(caughtMessage).toContain(
         'Requesty request timed out (TimeoutError: The operation was aborted due to timeout) on attempt 1',
       );
       expect(fetchImpl).toHaveBeenCalledTimes(1);
       expect(timeoutSpy).toHaveBeenCalledTimes(1);
-      expect(timeoutSpy).toHaveBeenCalledWith(30_000);
+      expect(timeoutSpy).toHaveBeenCalledWith(REQUEST_TIMEOUT_MS);
+      expect(caughtMessage).toContain('httpStatus=none');
+      expect(caughtMessage).toContain(`timeoutMs=${REQUEST_TIMEOUT_MS}`);
+      expect(caughtMessage).not.toMatch(/malformed|invalid result/i);
+      expect(caughtMessage).not.toContain('I need a laptop.');
+      expect(caughtMessage).not.toContain('test-key-not-real');
     } finally {
       timeoutSpy.mockRestore();
     }
   });
 
-  it('reads JSON that follows reasoning text', async () => {
+  it('reads JSON after think tags that contain braces', async () => {
     process.env.REQUESTY_API_KEY = 'test-key-not-real';
     const fetchImpl = jest.fn().mockResolvedValue(
-      jsonResponse(chatCompletion(`Thinking first.\n${JSON.stringify(intakeJson)}`)),
+      jsonResponse(
+        chatCompletion(
+          `<think>Compare {"situation":"problem"} with the schema.</think>\n${JSON.stringify(intakeJson)}`,
+        ),
+      ),
     );
     const provider = new RequestyAiProvider(fetchImpl);
 
     await expect(
-      provider.complete({ employeeText: 'I need a laptop.', departments }),
+      provider.complete({ employeeText: 'I need a laptop.', departments, requestTypes: [] }),
+    ).resolves.toEqual(intakeJson);
+  });
+
+  it('prefers the last intake-shaped JSON object after reasoning braces', async () => {
+    process.env.REQUESTY_API_KEY = 'test-key-not-real';
+    const fetchImpl = jest.fn().mockResolvedValue(
+      jsonResponse(
+        chatCompletion(
+          `Considering {"situation":"problem","draft":null} first.\n${JSON.stringify(intakeJson)}`,
+        ),
+      ),
+    );
+    const provider = new RequestyAiProvider(fetchImpl);
+
+    await expect(
+      provider.complete({ employeeText: 'I need a laptop.', departments, requestTypes: [] }),
+    ).resolves.toEqual(intakeJson);
+  });
+
+
+  it('reads an intake object when the model appends a markdown fence', async () => {
+    process.env.REQUESTY_API_KEY = 'test-key-not-real';
+    const fenced = `${JSON.stringify(intakeJson, null, 2)}\n\`\`\``;
+    const fetchImpl = jest.fn().mockResolvedValue(jsonResponse(chatCompletion(fenced)));
+    const provider = new RequestyAiProvider(fetchImpl);
+
+    await expect(
+      provider.complete({ employeeText: 'I need a laptop.', departments, requestTypes: [] }),
     ).resolves.toEqual(intakeJson);
   });
 
@@ -185,7 +236,7 @@ describe('RequestyAiProvider', () => {
     const provider = new RequestyAiProvider(fetchImpl);
 
     await expect(
-      provider.complete({ employeeText: 'I need a laptop.', departments }),
+      provider.complete({ employeeText: 'I need a laptop.', departments, requestTypes: [] }),
     ).rejects.toThrow(
       'Requesty request failed with status 503 on attempt 3: down; earlier attempts: 503, 503',
     );
@@ -209,7 +260,7 @@ describe('RequestyAiProvider', () => {
     const provider = new RequestyAiProvider(fetchImpl);
 
     await expect(
-      provider.complete({ employeeText: 'I need a laptop.', departments }),
+      provider.complete({ employeeText: 'I need a laptop.', departments, requestTypes: [] }),
     ).rejects.toThrow(
       'Requesty request failed with status 429 on attempt 3: code=rate_limit_exceeded type=rate_limit_error message=Too many requests; earlier attempts: 429, 429',
     );
@@ -227,7 +278,7 @@ describe('RequestyAiProvider', () => {
     const provider = new RequestyAiProvider(fetchImpl);
 
     await expect(
-      provider.complete({ employeeText: 'I need a laptop.', departments }),
+      provider.complete({ employeeText: 'I need a laptop.', departments, requestTypes: [] }),
     ).rejects.toThrow(
       'Requesty request failed with status 401 on attempt 1: rejected [redacted] Bearer [redacted]',
     );
@@ -243,7 +294,7 @@ describe('RequestyAiProvider', () => {
     const provider = new RequestyAiProvider(fetchImpl);
 
     await expect(
-      provider.complete({ employeeText: 'I need a laptop.', departments }),
+      provider.complete({ employeeText: 'I need a laptop.', departments, requestTypes: [] }),
     ).resolves.toEqual({ situation: 'need' });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
@@ -254,7 +305,7 @@ describe('RequestyAiProvider', () => {
     const provider = new RequestyAiProvider(fetchImpl);
 
     await expect(
-      provider.complete({ employeeText: 'I need a laptop.', departments }),
+      provider.complete({ employeeText: 'I need a laptop.', departments, requestTypes: [] }),
     ).rejects.toThrow(
       'Requesty request failed (Error: ECONNRESET) on attempt 3; earlier attempts: network Error, network Error',
     );
@@ -267,7 +318,7 @@ describe('RequestyAiProvider', () => {
     const provider = new RequestyAiProvider(fetchImpl);
 
     await expect(
-      provider.complete({ employeeText: 'I need a laptop.', departments }),
+      provider.complete({ employeeText: 'I need a laptop.', departments, requestTypes: [] }),
     ).rejects.toBeInstanceOf(InvalidAiOutputError);
   });
 
@@ -277,7 +328,7 @@ describe('RequestyAiProvider', () => {
     const provider = new RequestyAiProvider(fetchImpl);
 
     await expect(
-      provider.complete({ employeeText: 'I need a laptop.', departments }),
+      provider.complete({ employeeText: 'I need a laptop.', departments, requestTypes: [] }),
     ).rejects.toBeInstanceOf(InvalidAiOutputError);
   });
 });

@@ -1,5 +1,20 @@
-import { FormEvent, useState } from 'react';
-import { createDepartment, Department, inviteStaff } from './api';
+import { FormEvent, useEffect, useState } from 'react';
+import {
+  ApiError,
+  createDepartment,
+  Department,
+  DepartmentTemplate,
+  DepartmentTemplateId,
+  inviteStaff,
+  StaleSessionResult,
+} from './api';
+import {
+  confirmedSuggestions,
+  draftsFromTemplate,
+  DraftSuggestion,
+  TemplatePicker,
+  TemplateSuggestionEditor,
+} from './department-templates';
 
 export function SignupForm({
   busy,
@@ -22,8 +37,9 @@ export function SignupForm({
     <section className="card">
       <h2>Create a company workspace</h2>
       <p className="muted">
-        This creates your company and your Super Admin account. You will verify your email before
-        the workspace is active. Staff join only when you invite them.
+        This creates your company and your Super Admin account. The workspace starts with IT, HR,
+        and Finance, which you can rename or delete. You will verify your email before the
+        workspace is active. Staff join only when you invite them.
       </p>
       <form className="stack" onSubmit={onForm}>
         <label>
@@ -132,72 +148,178 @@ export function AcceptInviteForm({
   );
 }
 
-export function CompanyTools({
+export function AddDepartmentForm({
+  busy,
+  run,
+  templates,
+  onAdded,
+}: {
+  busy: boolean;
+  run: (action: () => Promise<void>) => void;
+  templates: DepartmentTemplate[];
+  onAdded: () => Promise<void>;
+}) {
+  const defaultTemplate = templates.find((item) => item.id === 'CUSTOM_EMPTY') ?? templates[0];
+  const [departmentName, setDepartmentName] = useState('');
+  const [templateId, setTemplateId] = useState(defaultTemplate?.id ?? 'CUSTOM_EMPTY');
+  const [drafts, setDrafts] = useState<DraftSuggestion[]>(() => draftsFromTemplate(defaultTemplate));
+  const [notice, setNotice] = useState('');
+  const [formError, setFormError] = useState('');
+  const selected = templates.find((item) => item.id === templateId);
+
+  useEffect(() => {
+    if (templates.length === 0) {
+      return;
+    }
+    if (templates.some((item) => item.id === templateId)) {
+      return;
+    }
+    const next = templates.find((item) => item.id === 'CUSTOM_EMPTY') ?? templates[0];
+    if (next) {
+      setTemplateId(next.id);
+      setDrafts(draftsFromTemplate(next));
+    }
+  }, [templates, templateId]);
+
+  function onDepartment(event: FormEvent) {
+    event.preventDefault();
+    run(async () => {
+      setNotice('');
+      setFormError('');
+      try {
+        await createDepartment(departmentName, {
+          templateId: templateId as DepartmentTemplateId,
+          requestTypes: confirmedSuggestions(drafts),
+        });
+        setDepartmentName('');
+        const empty = templates.find((item) => item.id === 'CUSTOM_EMPTY') ?? templates[0];
+        if (empty) {
+          setTemplateId(empty.id);
+          setDrafts(draftsFromTemplate(empty));
+        } else {
+          setDrafts([]);
+        }
+        setNotice('Department added.');
+        await onAdded();
+      } catch (error) {
+        setFormError(error instanceof Error ? error.message : 'Could not add the department');
+        if (error instanceof StaleSessionResult || (error instanceof ApiError && error.status === 401)) {
+          throw error;
+        }
+      }
+    });
+  }
+
+  return (
+    <section className="card">
+      <h2>Add department</h2>
+      <p className="muted">
+        New departments belong to this company only. Choose an optional template, review any
+        suggested types, and keep the department name independent of that template.
+      </p>
+      {notice ? <p className="muted">{notice}</p> : null}
+      {formError ? (
+        <div className="alert" role="alert">
+          {formError}
+        </div>
+      ) : null}
+      <form className="stack" onSubmit={onDepartment}>
+        <label>
+          Department name
+          <input
+            value={departmentName}
+            onChange={(event) => setDepartmentName(event.target.value)}
+            required
+            maxLength={200}
+          />
+        </label>
+        <TemplatePicker
+          label="Department template"
+          templates={templates}
+          value={templateId}
+          onChange={(nextId) => {
+            setTemplateId(nextId as DepartmentTemplateId);
+            setDrafts(draftsFromTemplate(templates.find((item) => item.id === nextId)));
+          }}
+        />
+        {selected?.unspecifiedNotice ? (
+          <p className="muted" role="status">
+            {selected.unspecifiedNotice}
+          </p>
+        ) : null}
+        {selected?.id === 'CUSTOM_EMPTY' ? (
+          <p className="muted">Custom/Empty suggests no request types.</p>
+        ) : null}
+        <TemplateSuggestionEditor drafts={drafts} scope="new department" onChange={setDrafts} />
+        <button className="btn-secondary" type="submit" disabled={busy}>
+          Add department
+        </button>
+      </form>
+    </section>
+  );
+}
+
+export function InviteStaffForm({
   departments,
   busy,
   run,
-  onChanged,
+  onInvited,
 }: {
   departments: Department[];
   busy: boolean;
   run: (action: () => Promise<void>) => void;
-  onChanged: () => Promise<void>;
+  onInvited: () => Promise<void>;
 }) {
-  const [departmentName, setDepartmentName] = useState('');
   const [staffName, setStaffName] = useState('');
   const [staffEmail, setStaffEmail] = useState('');
   const [departmentId, setDepartmentId] = useState('');
   const [role, setRole] = useState<'EMPLOYEE' | 'DEPARTMENT_ADMIN' | 'SUPER_ADMIN'>('EMPLOYEE');
   const [canHandle, setCanHandle] = useState(false);
   const [notice, setNotice] = useState('');
-
-  function onDepartment(event: FormEvent) {
-    event.preventDefault();
-    run(async () => {
-      setNotice('');
-      await createDepartment(departmentName);
-      setDepartmentName('');
-      setNotice('Department added.');
-      await onChanged();
-    });
-  }
+  const [formError, setFormError] = useState('');
 
   function onInvite(event: FormEvent) {
     event.preventDefault();
     if (departmentId === '') return;
     run(async () => {
       setNotice('');
-      await inviteStaff({
-        email: staffEmail,
-        name: staffName,
-        departmentId: Number(departmentId),
-        role,
-        canHandle,
-      });
-      setStaffName('');
-      setStaffEmail('');
-      setCanHandle(false);
-      setNotice('Invitation sent. They set their own password.');
-      await onChanged();
+      setFormError('');
+      try {
+        await inviteStaff({
+          email: staffEmail,
+          name: staffName,
+          departmentId: Number(departmentId),
+          role,
+          canHandle: role === 'SUPER_ADMIN' ? false : canHandle,
+        });
+        setStaffName('');
+        setStaffEmail('');
+        setCanHandle(false);
+        setNotice('Invitation sent. They set their own password.');
+        await onInvited();
+      } catch (error) {
+        setFormError(error instanceof Error ? error.message : 'Could not send the invitation');
+        if (error instanceof StaleSessionResult || (error instanceof ApiError && error.status === 401)) {
+          throw error;
+        }
+      }
     });
   }
 
   return (
     <section className="card">
-      <h2>Company workspace</h2>
-      <p className="muted">Add a department, then invite staff into this company. They choose their own password.</p>
+      <h2>Invite staff</h2>
+      <p className="muted">
+        Invite people into this company. Handler eligibility is separate from role. Super Admin
+        accounts cannot handle, own, or claim requests.
+      </p>
       {notice ? <p className="muted">{notice}</p> : null}
-      <form className="stack" onSubmit={onDepartment}>
-        <label>
-          Department name
-          <input value={departmentName} onChange={(event) => setDepartmentName(event.target.value)} required maxLength={200} />
-        </label>
-        <button className="btn-secondary" type="submit" disabled={busy}>
-          Add department
-        </button>
-      </form>
+      {formError ? (
+        <div className="alert" role="alert">
+          {formError}
+        </div>
+      ) : null}
       <form className="stack" onSubmit={onInvite}>
-        <h3>Invite staff</h3>
         <label>
           Staff name
           <input value={staffName} onChange={(event) => setStaffName(event.target.value)} required maxLength={200} />
@@ -218,16 +340,30 @@ export function CompanyTools({
           </select>
         </label>
         <label>
-          Role
-          <select value={role} onChange={(event) => setRole(event.target.value as typeof role)}>
+          Staff role
+          <select
+            value={role}
+            onChange={(event) => {
+              const next = event.target.value as typeof role;
+              setRole(next);
+              if (next === 'SUPER_ADMIN') {
+                setCanHandle(false);
+              }
+            }}
+          >
             <option value="EMPLOYEE">Employee</option>
             <option value="DEPARTMENT_ADMIN">Department Admin</option>
             <option value="SUPER_ADMIN">Super Admin</option>
           </select>
         </label>
         <label>
-          <input type="checkbox" checked={canHandle} onChange={(event) => setCanHandle(event.target.checked)} /> Can
-          handle requests
+          <input
+            type="checkbox"
+            checked={role === 'SUPER_ADMIN' ? false : canHandle}
+            onChange={(event) => setCanHandle(event.target.checked)}
+            disabled={role === 'SUPER_ADMIN'}
+          />{' '}
+          Can handle requests
         </label>
         <button className="btn-primary" type="submit" disabled={busy || departmentId === ''}>
           Send invitation

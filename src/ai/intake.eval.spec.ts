@@ -8,7 +8,9 @@ import {
   closeTestApp,
   createTestApp,
   HR,
+  HR_TYPE,
   IT,
+  IT_TYPE,
   JOHN,
 } from '../requests/test-helpers';
 
@@ -50,6 +52,7 @@ describe('AI intake evals', () => {
     expect(response.body.situation).toBe('problem');
     expect(response.body.troubleshootingSteps).toHaveLength(3);
     expect(response.body.draft.departmentId).toBe(IT);
+    expect(response.body.draft.requestTypeId).toBe(IT_TYPE);
     expect(response.body.draft.summary).toBeTruthy();
     expect(await countAuthoritativeRows(prisma)).toEqual({ requests: 0, history: 0 });
   });
@@ -64,6 +67,7 @@ describe('AI intake evals', () => {
     expect(response.body.situation).toBe('need');
     expect(response.body.troubleshootingSteps).toEqual([]);
     expect(response.body.draft.departmentId).toBe(IT);
+    expect(response.body.draft.requestTypeId).toBe(IT_TYPE);
     expect(await countAuthoritativeRows(prisma)).toEqual({ requests: 0, history: 0 });
   });
 
@@ -77,6 +81,7 @@ describe('AI intake evals', () => {
     expect(response.body.situation).toBe('need');
     expect(response.body.troubleshootingSteps).toEqual([]);
     expect(response.body.draft.departmentId).toBe(HR);
+    expect(response.body.draft.requestTypeId).toBe(HR_TYPE);
     expect(response.body.draft.summary).toBeTruthy();
     expect(isActionableIntakeDraft(response.body.draft)).toBe(true);
     expect(response.body.missingInformation).toEqual([]);

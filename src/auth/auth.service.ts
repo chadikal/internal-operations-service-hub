@@ -5,10 +5,11 @@ import {
   HttpException,
   HttpStatus,
   Injectable,
+  NotFoundException,
   OnModuleInit,
   UnauthorizedException,
 } from '@nestjs/common';
-import { AccountRole, CompanyStatus, Prisma } from '@prisma/client';
+import { AccountRole, ApprovalPolicy, CompanyStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { appLinkOrigin, EmailSender, EMAIL_VERIFICATION_TTL_MS, INVITATION_TTL_MS } from './email-sender';
 import { loginEmailKey, normalizeEmail } from './email';
@@ -23,12 +24,31 @@ import {
   readSessionToken,
   signSessionToken,
 } from './session-token';
+import {
+  DepartmentTemplatePreview,
+  getDepartmentTemplate,
+  listDepartmentTemplates,
+  toTemplatePreview,
+} from './department-templates';
 import { hashOpaqueToken } from './token-hash';
 
 const INVALID_LOGIN = 'Invalid email or password';
 const INVALID_LINK = 'This link is invalid or expired.';
 const USED_LINK = 'This link has already been used.';
 const EMAIL_IN_USE = 'An account with this email already exists';
+const DEPARTMENT_IN_USE = 'A department with employees or requests cannot be deleted';
+const UNKNOWN_TEMPLATE = 'Unknown department template';
+const DUPLICATE_CONFIRMED_NAMES = 'Confirmed request types must not use the same name more than once';
+
+type ConfirmedRequestType = { name: string; approvalPolicy: ApprovalPolicy };
+type RequestTypeRecord = {
+  id: number;
+  departmentId: number;
+  name: string;
+  approvalPolicy: ApprovalPolicy;
+};
+
+export const DEFAULT_COMPANY_DEPARTMENTS = ['IT', 'HR', 'Finance'] as const;
 
 const accountWithCompany = {
   include: { company: { select: { name: true, status: true } } },
@@ -239,6 +259,12 @@ export class AuthService implements OnModuleInit {
         const company = await tx.company.create({
           data: { name: companyName, status: CompanyStatus.PENDING },
         });
+        await tx.department.createMany({
+          data: DEFAULT_COMPANY_DEPARTMENTS.map((departmentName) => ({
+            name: departmentName,
+            companyId: company.id,
+          })),
+        });
         const account = await tx.employee.create({
           data: {
             name,
@@ -313,16 +339,249 @@ export class AuthService implements OnModuleInit {
     return { verified: true };
   }
 
-  async createDepartment(actor: SessionAccount, name: string): Promise<{ id: number; name: string }> {
+  listDepartmentTemplates(actor: SessionAccount): DepartmentTemplatePreview[] {
     this.assertCompanySuperAdmin(actor);
+    return listDepartmentTemplates().map(toTemplatePreview);
+  }
+
+  previewDepartmentTemplate(actor: SessionAccount, id: string): DepartmentTemplatePreview {
+    this.assertCompanySuperAdmin(actor);
+    const template = getDepartmentTemplate(id);
+    if (!template) {
+      throw new NotFoundException(`Department template ${id} was not found`);
+    }
+    return toTemplatePreview(template);
+  }
+
+  async createDepartment(
+    actor: SessionAccount,
+    input: { name: string; templateId?: string; requestTypes?: ConfirmedRequestType[] },
+  ): Promise<{ id: number; name: string; requestTypes: RequestTypeRecord[] }> {
+    this.assertCompanySuperAdmin(actor);
+    this.requireKnownTemplateId(input.templateId);
+    const name = this.requireDepartmentName(input.name);
+    const confirmed = this.normalizeConfirmedTypes(input.requestTypes ?? []);
+    return this.prisma.$transaction(async (tx) => {
+      const department = await tx.department.create({
+        data: { name, companyId: actor.companyId },
+        select: { id: true, name: true },
+      });
+      const requestTypes = await this.insertConfirmedTypes(
+        tx,
+        department.id,
+        actor.companyId,
+        confirmed,
+      );
+      return { ...department, requestTypes };
+    });
+  }
+
+  async applyDepartmentTemplateTypes(
+    actor: SessionAccount,
+    departmentId: number,
+    input: { templateId?: string; requestTypes: ConfirmedRequestType[] },
+  ): Promise<{ id: number; name: string; requestTypes: RequestTypeRecord[] }> {
+    this.assertCompanySuperAdmin(actor);
+    this.requireKnownTemplateId(input.templateId);
+    const confirmed = this.normalizeConfirmedTypes(input.requestTypes);
+    return this.prisma.$transaction(async (tx) => {
+      const department = await tx.department.findFirst({
+        where: { id: departmentId, companyId: actor.companyId },
+        select: { id: true, name: true },
+      });
+      if (!department) {
+        throw new NotFoundException(`Department ${departmentId} was not found`);
+      }
+      await this.insertConfirmedTypes(tx, department.id, actor.companyId, confirmed);
+      const requestTypes = await tx.requestType.findMany({
+        where: { departmentId: department.id, companyId: actor.companyId },
+        select: { id: true, departmentId: true, name: true, approvalPolicy: true },
+        orderBy: { id: 'asc' },
+      });
+      return { ...department, requestTypes };
+    });
+  }
+
+  async updateDepartment(
+    actor: SessionAccount,
+    id: number,
+    name: string,
+  ): Promise<{ id: number; name: string }> {
+    this.assertCompanySuperAdmin(actor);
+    const trimmed = this.requireDepartmentName(name);
+    const updated = await this.prisma.department.updateMany({
+      where: { id, companyId: actor.companyId },
+      data: { name: trimmed },
+    });
+    if (updated.count !== 1) {
+      throw new NotFoundException(`Department ${id} was not found`);
+    }
+    return { id, name: trimmed };
+  }
+
+  async deleteDepartment(actor: SessionAccount, id: number): Promise<{ deleted: true }> {
+    this.assertCompanySuperAdmin(actor);
+    const department = await this.prisma.department.findFirst({
+      where: { id, companyId: actor.companyId },
+      select: { id: true },
+    });
+    if (!department) {
+      throw new NotFoundException(`Department ${id} was not found`);
+    }
+    const [employees, requests] = await Promise.all([
+      this.prisma.employee.count({ where: { departmentId: id, companyId: actor.companyId } }),
+      this.prisma.request.count({ where: { departmentId: id, companyId: actor.companyId } }),
+    ]);
+    if (employees > 0 || requests > 0) {
+      throw new ConflictException(DEPARTMENT_IN_USE);
+    }
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.requestType.deleteMany({
+          where: { departmentId: id, companyId: actor.companyId },
+        });
+        await tx.department.delete({ where: { id } });
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2003') {
+        throw new ConflictException(DEPARTMENT_IN_USE);
+      }
+      throw error;
+    }
+    return { deleted: true };
+  }
+
+  async createRequestType(
+    actor: SessionAccount,
+    departmentId: number,
+    name: string,
+    approvalPolicy: ApprovalPolicy,
+  ): Promise<{ id: number; departmentId: number; name: string; approvalPolicy: ApprovalPolicy }> {
+    this.assertCompanySuperAdmin(actor);
+    const department = await this.prisma.department.findFirst({
+      where: { id: departmentId, companyId: actor.companyId },
+      select: { id: true },
+    });
+    if (!department) {
+      throw new NotFoundException(`Department ${departmentId} was not found`);
+    }
+    const created = await this.insertConfirmedTypes(this.prisma, departmentId, actor.companyId, [
+      { name: this.requireDepartmentName(name), approvalPolicy },
+    ]);
+    return created[0]!;
+  }
+
+  async updateRequestType(
+    actor: SessionAccount,
+    id: number,
+    input: { name?: string; approvalPolicy?: ApprovalPolicy },
+  ): Promise<{ id: number; departmentId: number; name: string; approvalPolicy: ApprovalPolicy }> {
+    this.assertCompanySuperAdmin(actor);
+    const existing = await this.prisma.requestType.findFirst({
+      where: { id, companyId: actor.companyId },
+      select: { id: true, departmentId: true, name: true, approvalPolicy: true },
+    });
+    if (!existing) {
+      throw new NotFoundException(`Request type ${id} was not found`);
+    }
+    if (input.name === undefined && input.approvalPolicy === undefined) {
+      throw new BadRequestException('name or approvalPolicy is required');
+    }
+    if (input.name !== undefined) {
+      const nextName = this.requireDepartmentName(input.name);
+      const clash = await this.prisma.requestType.findFirst({
+        where: {
+          departmentId: existing.departmentId,
+          companyId: actor.companyId,
+          id: { not: id },
+          name: { equals: nextName, mode: 'insensitive' },
+        },
+        select: { name: true },
+      });
+      if (clash) {
+        throw new ConflictException(this.duplicateTypeNameMessage(clash.name));
+      }
+    }
+    const updated = await this.prisma.requestType.update({
+      where: { id },
+      data: {
+        ...(input.name !== undefined ? { name: this.requireDepartmentName(input.name) } : {}),
+        ...(input.approvalPolicy !== undefined ? { approvalPolicy: input.approvalPolicy } : {}),
+      },
+      select: { id: true, departmentId: true, name: true, approvalPolicy: true },
+    });
+    return updated;
+  }
+
+  private requireDepartmentName(name: string): string {
     const trimmed = name.trim();
     if (trimmed.length === 0 || trimmed.length > 200) {
       throw new BadRequestException('name is required');
     }
-    return this.prisma.department.create({
-      data: { name: trimmed, companyId: actor.companyId },
-      select: { id: true, name: true },
-    });
+    return trimmed;
+  }
+
+  private requireKnownTemplateId(templateId: string | undefined): void {
+    if (templateId !== undefined && getDepartmentTemplate(templateId) == null) {
+      throw new BadRequestException(UNKNOWN_TEMPLATE);
+    }
+  }
+
+  private normalizeConfirmedTypes(items: ConfirmedRequestType[]): ConfirmedRequestType[] {
+    return items.map((item) => ({
+      name: this.requireDepartmentName(item.name),
+      approvalPolicy: item.approvalPolicy,
+    }));
+  }
+
+  private assertUniqueConfirmedNames(items: ConfirmedRequestType[]): void {
+    const seen = new Set<string>();
+    for (const item of items) {
+      const key = item.name.toLowerCase();
+      if (seen.has(key)) {
+        throw new ConflictException(DUPLICATE_CONFIRMED_NAMES);
+      }
+      seen.add(key);
+    }
+  }
+
+  private duplicateTypeNameMessage(name: string): string {
+    return `A request type named "${name}" already exists in this department`;
+  }
+
+  private async insertConfirmedTypes(
+    tx: Prisma.TransactionClient | PrismaService,
+    departmentId: number,
+    companyId: number,
+    items: ConfirmedRequestType[],
+  ): Promise<RequestTypeRecord[]> {
+    this.assertUniqueConfirmedNames(items);
+    const created: RequestTypeRecord[] = [];
+    for (const item of items) {
+      const existing = await tx.requestType.findFirst({
+        where: {
+          departmentId,
+          companyId,
+          name: { equals: item.name, mode: 'insensitive' },
+        },
+        select: { name: true },
+      });
+      if (existing) {
+        throw new ConflictException(this.duplicateTypeNameMessage(existing.name));
+      }
+      created.push(
+        await tx.requestType.create({
+          data: {
+            name: item.name,
+            approvalPolicy: item.approvalPolicy,
+            departmentId,
+            companyId,
+          },
+          select: { id: true, departmentId: true, name: true, approvalPolicy: true },
+        }),
+      );
+    }
+    return created;
   }
 
   async inviteStaff(
@@ -361,7 +620,7 @@ export class AuthService implements OnModuleInit {
             departmentId: input.departmentId,
             passwordHash: null,
             role: input.role,
-            canHandle: input.canHandle,
+            canHandle: input.role === AccountRole.SUPER_ADMIN ? false : input.canHandle,
             active: false,
           },
           include: { company: { select: { name: true, status: true } } },
@@ -433,7 +692,7 @@ export class AuthService implements OnModuleInit {
     return { accepted: true };
   }
 
-  private assertCompanySuperAdmin(actor: SessionAccount): void {
+  assertCompanySuperAdmin(actor: SessionAccount): void {
     if (actor.role !== AccountRole.SUPER_ADMIN) {
       throw new ForbiddenException('Only a Super Admin can manage this company');
     }

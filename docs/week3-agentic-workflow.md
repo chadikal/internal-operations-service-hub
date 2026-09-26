@@ -1,5 +1,7 @@
 # Week 3 Agentic Workflow
 
+This is a historical Week 3 delivery record. Current product rules (identity, Super Admin visibility, departments, approval policy) are in `docs/product-spec.md`. Later decisions do not rewrite this note.
+
 Bounded full-stack vertical slice: existing NestJS request lifecycle, Prisma/PostgreSQL persistence, and one React view.
 
 ## UNDERSTAND

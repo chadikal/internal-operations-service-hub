@@ -2,7 +2,9 @@
 
 Status: **implemented** on `feature/full-product-foundation`. Company signup in ADR-003 replaced the first-Super-Admin command and `POST /auth/accounts`. The decisions below remain the record of this authentication slice. Current onboarding and company scope are in ADR-003.
 
-Confirmed product rules that are still not in this slice (claiming, approvals, admin screens, password reset) stay in `docs/product-spec.md`. Password reset and deployment hosting remain unresolved.
+**25 September 2026 — current product, not a rewrite of this slice.** The body below still describes what this authentication slice shipped (`POST /auth/accounts`, the setup command, view if `canHandle` or submitter). Those provisioning paths were replaced by ADR-003. Super Admin admin APIs and the workspace now exist. Super Admin still cannot claim, own, or handle. **Implemented:** Super Admin sees dashboard totals and a limited oversight table (ID, submitter name, title, employee department, destination department, status). `GET /requests/:id` and history are full detail for that Super Admin’s submissions only; unrelated same-company ids are **403**. The finished detail rule also includes eligible Super Admin approval-inbox requests when that inbox exists. Approval state ships before staff self-claim. See `docs/product-spec.md`.
+
+Confirmed product rules that are still not built (claiming, approvals) stay in `docs/product-spec.md`. Password reset and deployment hosting remain unresolved. Super Admin admin screens now exist as a later pass; this slice’s “no admin screens” sentence is historical.
 
 ## Confirmed rules this slice satisfies
 
@@ -137,6 +139,8 @@ No production default password is committed.
 Until claiming and approvals are built, request rules stay as they are: view if `canHandle` or the caller submitted the request; assign and transition only when `canHandle`; the owner cannot be the submitter; only the current owner may transition.
 
 Role is stored and returned by `GET /auth/me`. Department Admin does not gain an approval inbox. Super Admin does not gain department, request-type, or company-details screens. The only new Super Admin power in this slice is `POST /auth/accounts` plus the setup command. A Super Admin without `canHandle` cannot assign or transition. Deactivation has no screen; tests change the active flag in the test database.
+
+This section is the authentication-slice record. Current Super Admin workspace powers and limited request oversight are in `docs/product-spec.md` and in the 25 September 2026 note at the top of this ADR.
 
 ## Acceptance criteria
 

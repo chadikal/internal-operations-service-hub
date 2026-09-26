@@ -14,6 +14,7 @@ import {
 } from './email-sender';
 import { hashOpaqueToken } from './token-hash';
 import { LoginRateLimiter } from './login-rate-limit';
+import { DEFAULT_COMPANY_DEPARTMENTS } from './auth.service';
 import {
   authHeaders,
   CHADI,
@@ -24,6 +25,7 @@ import {
   ensureTestCredentials,
   IT,
   JOHN,
+  createTestRequestType,
   removeNonDevelopmentCompanies,
   TEST_ORIGIN,
 } from '../requests/test-helpers';
@@ -33,10 +35,12 @@ jest.setTimeout(60_000);
 const PASSWORD = 'founder-password-not-for-production';
 
 const seenDepartments: { id: number; name: string }[] = [];
+const seenRequestTypes: { id: number; name: string; departmentId: number }[] = [];
 
 const recordingProvider: AiProvider = {
   async complete(input) {
     seenDepartments.splice(0, seenDepartments.length, ...input.departments);
+    seenRequestTypes.splice(0, seenRequestTypes.length, ...input.requestTypes);
     return {
       situation: 'need',
       troubleshootingSteps: [],
@@ -98,6 +102,7 @@ describe('company signup', () => {
 
   beforeEach(async () => {
     seenDepartments.splice(0, seenDepartments.length);
+    seenRequestTypes.splice(0, seenRequestTypes.length);
     app.get(LoginRateLimiter).reset();
     await cleanup(prisma);
   });
@@ -119,6 +124,16 @@ describe('company signup', () => {
     const it = await prisma.department.findUniqueOrThrow({ where: { id: IT } });
     expect(it.name).toBe('IT');
     expect(it.companyId).toBe(companyId);
+    const developmentDepartments = await prisma.department.findMany({
+      where: { companyId },
+      select: { id: true, name: true },
+      orderBy: { id: 'asc' },
+    });
+    expect(developmentDepartments).toEqual([
+      { id: 1, name: 'IT' },
+      { id: 2, name: 'HR' },
+      { id: 3, name: 'Finance' },
+    ]);
   });
 
   it('activates a workspace only after email verification and lets the invitee set a password', async () => {
@@ -183,6 +198,12 @@ describe('company signup', () => {
       Cookie: authCookie(login),
       'X-CSRF-Token': login.body.csrfToken as string,
     };
+
+    const listed = await request(app.getHttpServer()).get('/departments').set(headers);
+    expect(listed.status).toBe(200);
+    expect(listed.body.map((department: { name: string }) => department.name).sort()).toEqual(
+      [...DEFAULT_COMPANY_DEPARTMENTS].sort(),
+    );
 
     const department = await request(app.getHttpServer())
       .post('/departments')
@@ -361,6 +382,146 @@ describe('company signup', () => {
     expect(await prisma.company.count({ where: { name: { in: ['Race One', 'Race Two'] } } })).toBe(1);
     const winner = raced.find((result) => result.status === 201);
     expect(winner?.body.email).toBe('race.founder@operations-hub.test');
+    const extraCompanies = await prisma.company.findMany({
+      where: { name: { in: ['Race One', 'Race Two'] } },
+      select: { id: true },
+    });
+    expect(extraCompanies).toHaveLength(1);
+    expect(
+      await prisma.department.count({ where: { companyId: extraCompanies[0].id } }),
+    ).toBe(DEFAULT_COMPANY_DEPARTMENTS.length);
+    expect(
+      await prisma.department.count({
+        where: { companyId: { not: await developmentCompanyId(prisma) } },
+      }),
+    ).toBe(DEFAULT_COMPANY_DEPARTMENTS.length);
+  });
+
+  it('gives each new company its own IT, HR, and Finance set and keeps those defaults ordinary', async () => {
+    await signup(app, {
+      companyName: 'Defaults A',
+      name: 'Founder A',
+      email: 'defaults.a@operations-hub.test',
+      password: PASSWORD,
+    });
+    await signup(app, {
+      companyName: 'Defaults B',
+      name: 'Founder B',
+      email: 'defaults.b@operations-hub.test',
+      password: PASSWORD,
+    });
+    const tokenA = await outboxToken(app, 'defaults.a@operations-hub.test', 'email-verification');
+    const tokenB = await outboxToken(app, 'defaults.b@operations-hub.test', 'email-verification');
+    expect(
+      (await request(app.getHttpServer()).post('/auth/verify-email').set('Origin', TEST_ORIGIN).send({ token: tokenA }))
+        .status,
+    ).toBe(200);
+    expect(
+      (await request(app.getHttpServer()).post('/auth/verify-email').set('Origin', TEST_ORIGIN).send({ token: tokenB }))
+        .status,
+    ).toBe(200);
+    const headersA = await loginHeaders(app, 'defaults.a@operations-hub.test', PASSWORD);
+    const headersB = await loginHeaders(app, 'defaults.b@operations-hub.test', PASSWORD);
+    const companyA = await prisma.company.findFirstOrThrow({ where: { name: 'Defaults A' } });
+    const companyB = await prisma.company.findFirstOrThrow({ where: { name: 'Defaults B' } });
+
+    const listedA = await request(app.getHttpServer()).get('/departments').set(headersA);
+    const listedB = await request(app.getHttpServer()).get('/departments').set(headersB);
+    expect(listedA.status).toBe(200);
+    expect(listedB.status).toBe(200);
+    expect(listedA.body.map((department: { name: string }) => department.name).sort()).toEqual(
+      [...DEFAULT_COMPANY_DEPARTMENTS].sort(),
+    );
+    expect(listedB.body.map((department: { name: string }) => department.name).sort()).toEqual(
+      [...DEFAULT_COMPANY_DEPARTMENTS].sort(),
+    );
+    expect(listedA.body).toHaveLength(DEFAULT_COMPANY_DEPARTMENTS.length);
+    expect(listedB.body).toHaveLength(DEFAULT_COMPANY_DEPARTMENTS.length);
+    const idsA = listedA.body.map((department: { id: number }) => department.id);
+    const idsB = listedB.body.map((department: { id: number }) => department.id);
+    expect(idsA.some((id: number) => idsB.includes(id))).toBe(false);
+    expect(await prisma.department.count({ where: { companyId: companyA.id } })).toBe(3);
+    expect(await prisma.department.count({ where: { companyId: companyB.id } })).toBe(3);
+
+    const financeA = listedA.body.find((department: { name: string }) => department.name === 'Finance');
+    const hrA = listedA.body.find((department: { name: string }) => department.name === 'HR');
+    const itA = listedA.body.find((department: { name: string }) => department.name === 'IT');
+    expect(financeA).toBeDefined();
+    expect(hrA).toBeDefined();
+    expect(itA).toBeDefined();
+
+    const renamed = await request(app.getHttpServer())
+      .patch(`/departments/${financeA.id}`)
+      .set(headersA)
+      .send({ name: '  Treasury  ' });
+    expect(renamed.status).toBe(200);
+    expect(renamed.body).toEqual({ id: financeA.id, name: 'Treasury' });
+
+    const deletedHr = await request(app.getHttpServer()).delete(`/departments/${hrA.id}`).set(headersA);
+    expect(deletedHr.status).toBe(200);
+    expect(deletedHr.body).toEqual({ deleted: true });
+    expect(await prisma.department.findUnique({ where: { id: hrA.id } })).toBeNull();
+
+    const invited = await request(app.getHttpServer()).post('/auth/invitations').set(headersA).send({
+      email: 'defaults.staff@operations-hub.test',
+      name: 'Defaults Staff',
+      departmentId: itA.id,
+      role: 'EMPLOYEE',
+      canHandle: false,
+    });
+    expect(invited.status).toBe(201);
+    const occupied = await request(app.getHttpServer()).delete(`/departments/${itA.id}`).set(headersA);
+    expect(occupied.status).toBe(409);
+    expect(occupied.body.message).toBe('A department with employees or requests cannot be deleted');
+    expect(await prisma.department.findUnique({ where: { id: itA.id } })).not.toBeNull();
+
+    const founderA = await prisma.employee.findUniqueOrThrow({
+      where: { email: 'defaults.a@operations-hub.test' },
+    });
+    const treasuryType = await createTestRequestType(app, headersA, financeA.id, 'Card');
+    const createdRequest = await request(app.getHttpServer()).post('/requests').set(headersA).send({
+      submittedBy: founderA.id,
+      departmentId: financeA.id,
+      requestTypeId: treasuryType.id,
+      title: 'Treasury card',
+    });
+    expect(createdRequest.status).toBe(201);
+    const occupiedByRequest = await request(app.getHttpServer())
+      .delete(`/departments/${financeA.id}`)
+      .set(headersA);
+    expect(occupiedByRequest.status).toBe(409);
+    expect(occupiedByRequest.body.message).toBe('A department with employees or requests cannot be deleted');
+
+    const inviteToken = await outboxToken(app, 'defaults.staff@operations-hub.test', 'invitation');
+    expect(
+      (
+        await request(app.getHttpServer())
+          .post('/auth/invitations/accept')
+          .set('Origin', TEST_ORIGIN)
+          .send({ token: inviteToken, password: 'staff-password-not-for-production' })
+      ).status,
+    ).toBe(200);
+    const staffHeaders = await loginHeaders(app, 'defaults.staff@operations-hub.test', 'staff-password-not-for-production');
+    const staffPatch = await request(app.getHttpServer())
+      .patch(`/departments/${itA.id}`)
+      .set(staffHeaders)
+      .send({ name: 'Helpdesk' });
+    expect(staffPatch.status).toBe(403);
+    const staffDelete = await request(app.getHttpServer()).delete(`/departments/${itA.id}`).set(staffHeaders);
+    expect(staffDelete.status).toBe(403);
+
+    const foreignPatch = await request(app.getHttpServer())
+      .patch(`/departments/${idsB[0]}`)
+      .set(headersA)
+      .send({ name: 'Stolen' });
+    expect(foreignPatch.status).toBe(404);
+    const foreignDelete = await request(app.getHttpServer()).delete(`/departments/${idsB[0]}`).set(headersA);
+    expect(foreignDelete.status).toBe(404);
+    expect(
+      (await request(app.getHttpServer()).get('/departments').set(headersB)).body.map(
+        (department: { name: string }) => department.name,
+      ).sort(),
+    ).toEqual([...DEFAULT_COMPANY_DEPARTMENTS].sort());
   });
 
   it('denies cross-company request, history, lookup, and intake access', async () => {
@@ -404,10 +565,13 @@ describe('company signup', () => {
       .send({ name: 'Desk B' });
     expect(departmentA.status).toBe(201);
     expect(departmentB.status).toBe(201);
+    const typeA = await createTestRequestType(app, headersA, departmentA.body.id, 'Desk A work');
+    const typeB = await createTestRequestType(app, headersB, departmentB.body.id, 'Desk B work');
 
     const created = await request(app.getHttpServer()).post('/requests').set(headersA).send({
       submittedBy: founderA.id,
       departmentId: departmentA.body.id,
+      requestTypeId: typeA.id,
       title: 'Only company A',
     });
     expect(created.status).toBe(201);
@@ -416,6 +580,7 @@ describe('company signup', () => {
     const foreignDepartment = await request(app.getHttpServer()).post('/requests').set(headersA).send({
       submittedBy: founderA.id,
       departmentId: departmentB.body.id,
+      requestTypeId: typeB.id,
       title: 'Should not exist',
     });
     expect(foreignDepartment.status).toBe(400);
@@ -455,8 +620,20 @@ describe('company signup', () => {
       .set(headersA)
       .send({ text: 'I need a desk.' });
     expect(intake.status).toBe(200);
-    expect(seenDepartments.map((department) => department.id)).toEqual([departmentA.body.id]);
+    expect(seenDepartments.map((department) => department.name).sort()).toEqual(
+      ['Desk A', ...DEFAULT_COMPANY_DEPARTMENTS].sort(),
+    );
+    expect(seenDepartments.map((department) => department.id)).toContain(departmentA.body.id);
     expect(seenDepartments.map((department) => department.id)).not.toContain(departmentB.body.id);
+    expect(seenRequestTypes.map((item) => item.id)).toContain(typeA.id);
+    expect(seenRequestTypes.map((item) => item.id)).not.toContain(typeB.id);
+    expect(JSON.stringify(seenRequestTypes)).not.toMatch(/approvalPolicy|DEPARTMENT_ADMIN|SUPER_ADMIN/);
+    const listedA = await request(app.getHttpServer()).get('/request-types').set(headersA);
+    const listedB = await request(app.getHttpServer()).get('/request-types').set(headersB);
+    expect(listedA.body.map((item: { id: number }) => item.id)).toContain(typeA.id);
+    expect(listedA.body.map((item: { id: number }) => item.id)).not.toContain(typeB.id);
+    expect(listedB.body.map((item: { id: number }) => item.id)).toContain(typeB.id);
+    expect(listedB.body.map((item: { id: number }) => item.id)).not.toContain(typeA.id);
 
     const session = await prisma.session.findFirstOrThrow({ where: { accountId: founderA.id, revokedAt: null } });
     await prisma.session.update({
@@ -517,6 +694,9 @@ describe('company signup', () => {
       expect(created.status).toBe(503);
       expect(created.body.message).toBe(EMAIL_NOT_CONFIGURED);
       expect(await prisma.company.findFirst({ where: { name: 'Production Blocked' } })).toBeNull();
+      expect(
+        await prisma.department.count({ where: { company: { name: 'Production Blocked' } } }),
+      ).toBe(0);
       expect(await prisma.employee.findUnique({ where: { email: 'prod.founder@operations-hub.test' } })).toBeNull();
       expect(
         await prisma.emailVerification.findFirst({
@@ -563,6 +743,29 @@ describe('company signup', () => {
       expect(await prisma.invitation.count({ where: { company: { name: 'Invite Later' } } })).toBe(0);
     } finally {
       process.env.NODE_ENV = previous;
+    }
+  });
+
+  it('rolls back the company and default departments when verification mail fails inside signup', async () => {
+    const developmentId = await developmentCompanyId(prisma);
+    const sender = app.get(EmailSender);
+    const queuedBefore = sender.list().length;
+    const send = jest.spyOn(sender, 'send').mockRejectedValueOnce(new Error('mail failed after writes'));
+    try {
+      const created = await signup(app, {
+        companyName: 'Mail Fail Co',
+        name: 'Mail Fail Founder',
+        email: 'mail.fail@operations-hub.test',
+        password: PASSWORD,
+      });
+      expect(created.status).toBeGreaterThanOrEqual(500);
+      expect(await prisma.company.findFirst({ where: { name: 'Mail Fail Co' } })).toBeNull();
+      expect(await prisma.employee.findUnique({ where: { email: 'mail.fail@operations-hub.test' } })).toBeNull();
+      expect(await prisma.department.count({ where: { companyId: { not: developmentId } } })).toBe(0);
+      expect(await prisma.company.count({ where: { id: { not: developmentId } } })).toBe(0);
+      expect(sender.list()).toHaveLength(queuedBefore);
+    } finally {
+      send.mockRestore();
     }
   });
 

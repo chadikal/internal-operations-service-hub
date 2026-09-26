@@ -29,6 +29,7 @@ test.describe('Account login', () => {
       has: page.getByRole('heading', { name: 'Create Request', level: 2 }),
     });
     await createCard.getByLabel('Department').selectOption({ label: 'IT' });
+    await createCard.getByLabel('Request type').selectOption({ label: 'General' });
     await createCard.getByLabel('Title').fill('John private title');
     await createCard.getByRole('button', { name: 'Create Request' }).click();
     await expect(page.getByText('John private title')).toBeVisible();

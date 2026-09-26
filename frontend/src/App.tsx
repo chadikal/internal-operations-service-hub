@@ -11,11 +11,13 @@ import {
   getHistory,
   getMe,
   getRequest,
+  getRequestTypes,
   hasActionableIntakeDraft,
   HistoryRecord,
   IntakeResult,
   login,
   logout,
+  RequestType,
   ServiceRequest,
   SessionUser,
   StaleSessionResult,
@@ -27,56 +29,51 @@ import {
   acceptInvitation,
 } from './api';
 import {
+  AdminShell,
+  ComingLaterPage,
+  DashboardPage,
+  DepartmentsPage,
+  EmployeesPage,
+} from './admin';
+import { AdminRequestsPage } from './admin-requests';
+import {
   AcceptInviteForm,
   CheckEmail,
-  CompanyTools,
   SignupForm,
   VerifyEmailForm,
 } from './onboarding';
+import { chooseIntakeStep, hasMissingRequiredInformation, IntakeStep, RequestWorkspace } from './request-workspace';
+import { AdminView, adminPath, isAdminPath, parseAdminView } from './routing';
 
-type IntakeStep = 'input' | 'troubleshoot' | 'offer' | 'draft' | 'resolved' | 'declined';
-
-function statusClass(status: ServiceRequest['status']) {
-  if (status === 'SUBMITTED') return 'badge badge-submitted';
-  if (status === 'IN_PROGRESS') return 'badge badge-progress';
-  return 'badge badge-completed';
-}
-
-function formatWhen(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString();
-}
-
-function hasMissingRequiredInformation(result: IntakeResult | null): boolean {
-  return (result?.missingInformation.length ?? 0) > 0;
-}
-
-function intakeSuggestions(result: IntakeResult | null): string[] {
-  return result?.suggestions ?? [];
-}
-
-function chooseIntakeStep(result: IntakeResult): IntakeStep {
-  if (result.situation === 'problem' && result.troubleshootingSteps.length > 0) {
-    return 'troubleshoot';
+function viewFromLocation(role: string | undefined): AdminView | 'home' {
+  if (role !== 'SUPER_ADMIN') {
+    return 'home';
   }
-  if (hasMissingRequiredInformation(result)) {
-    return 'input';
+  return parseAdminView(window.location.pathname) ?? 'dashboard';
+}
+
+function firstRequestTypeId(types: RequestType[], departmentId: string): string {
+  const match = types.find((item) => String(item.departmentId) === departmentId);
+  return match ? String(match.id) : '';
+}
+
+function syncUrl(role: string | undefined, view: AdminView | 'home') {
+  const next = role === 'SUPER_ADMIN' && view !== 'home' ? adminPath(view) : '/';
+  if (window.location.pathname !== next) {
+    window.history.replaceState({}, '', next);
   }
-  if (hasActionableIntakeDraft(result.draft)) {
-    return 'offer';
-  }
-  return 'input';
 }
 
 export default function App() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
+  const [requestTypes, setRequestTypes] = useState<RequestType[]>([]);
   const [user, setUser] = useState<SessionUser | null>(null);
   const [ready, setReady] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [departmentId, setDepartmentId] = useState('');
+  const [requestTypeId, setRequestTypeId] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [ownerId, setOwnerId] = useState('');
@@ -92,27 +89,17 @@ export default function App() {
   const [pendingEmail, setPendingEmail] = useState('');
   const [verifyToken, setVerifyToken] = useState(() => new URLSearchParams(window.location.search).get('verify'));
   const [inviteToken, setInviteToken] = useState(() => new URLSearchParams(window.location.search).get('invite'));
+  const [view, setView] = useState<AdminView | 'home'>(() => viewFromLocation(undefined));
+  const [urlSearch, setUrlSearch] = useState(() => window.location.search);
 
-  const canHandle = user?.canHandle === true;
-  const eligibleOwners = employees.filter(
-    (employee) =>
-      employee.canHandle === true &&
-      (request == null || Number(employee.id) !== Number(request.submittedBy)),
-  );
-  const isCurrentOwner =
-    user != null && request != null && Number(request.currentOwnerId) === Number(user.id);
-  const ownerSelectValue = eligibleOwners.some((employee) => String(employee.id) === ownerId)
-    ? ownerId
-    : eligibleOwners[0]
-      ? String(eligibleOwners[0].id)
-      : '';
-  const canSubmitRequest = user !== null && departmentId !== '';
+  const canSubmitRequest = user !== null && departmentId !== '' && requestTypeId !== '';
 
-  function clearAccountWorkspace() {
-    setUser(null);
+  function resetWorkspaceData() {
     setEmployees([]);
     setDepartments([]);
+    setRequestTypes([]);
     setDepartmentId('');
+    setRequestTypeId('');
     setTitle('');
     setDescription('');
     setOwnerId('');
@@ -126,12 +113,93 @@ export default function App() {
     setIntakeStep('input');
   }
 
+  function clearAccountWorkspace() {
+    setUser(null);
+    resetWorkspaceData();
+    setView('home');
+    syncUrl(undefined, 'home');
+  }
+
   function applySession(session: SessionUser) {
     beginClientSession(session);
-    clearAccountWorkspace();
+    resetWorkspaceData();
     setUser(session);
+    const nextView = viewFromLocation(session.role);
+    setView(nextView);
+    syncUrl(session.role, nextView);
     return currentSessionGeneration();
   }
+
+  function goTo(next: AdminView, query?: Record<string, string>) {
+    setView(next);
+    const path = adminPath(next, query);
+    const current = `${window.location.pathname}${window.location.search}`;
+    if (current !== path) {
+      window.history.pushState({}, '', path);
+    }
+    setUrlSearch(window.location.search);
+  }
+
+  useEffect(() => {
+    function onPopState() {
+      setView(viewFromLocation(user?.role));
+      setUrlSearch(window.location.search);
+    }
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [user?.role]);
+
+  useEffect(() => {
+    if (user?.role === 'SUPER_ADMIN' && !isAdminPath(window.location.pathname)) {
+      syncUrl(user.role, view === 'home' ? 'dashboard' : view);
+    }
+    if (user && user.role !== 'SUPER_ADMIN' && isAdminPath(window.location.pathname)) {
+      setView('home');
+      syncUrl(user.role, 'home');
+    }
+  }, [user, view]);
+
+  useEffect(() => {
+    if (!user || view !== 'requests') {
+      return;
+    }
+    const generation = currentSessionGeneration();
+    void Promise.all([getEmployees(), getDepartments(), getRequestTypes()]).then(
+      ([nextEmployees, nextDepartments, nextTypes]) => {
+        if (currentSessionGeneration() !== generation) {
+          return;
+        }
+        setEmployees(nextEmployees);
+        setDepartments(nextDepartments);
+        setRequestTypes(nextTypes);
+        const nextDepartmentId =
+          departmentId && nextDepartments.some((department) => String(department.id) === departmentId)
+            ? departmentId
+            : nextDepartments[0]
+              ? String(nextDepartments[0].id)
+              : '';
+        setDepartmentId(nextDepartmentId);
+        setRequestTypeId((current) => {
+          if (
+            current &&
+            nextTypes.some(
+              (item) => String(item.id) === current && String(item.departmentId) === nextDepartmentId,
+            )
+          ) {
+            return current;
+          }
+          return firstRequestTypeId(nextTypes, nextDepartmentId);
+        });
+        setOwnerId((current) => {
+          const handlers = nextEmployees.filter((employee) => employee.canHandle === true);
+          if (current && handlers.some((employee) => String(employee.id) === current)) {
+            return current;
+          }
+          return handlers[0] ? String(handlers[0].id) : '';
+        });
+      },
+    );
+  }, [user, view]);
 
   useEffect(() => {
     const generation = currentSessionGeneration();
@@ -141,13 +209,20 @@ export default function App() {
           return;
         }
         const started = applySession(session);
-        const [nextEmployees, nextDepartments] = await Promise.all([getEmployees(), getDepartments()]);
+        const [nextEmployees, nextDepartments, nextTypes] = await Promise.all([
+          getEmployees(),
+          getDepartments(),
+          getRequestTypes(),
+        ]);
         if (currentSessionGeneration() !== started) {
           return;
         }
         setEmployees(nextEmployees);
         setDepartments(nextDepartments);
-        if (nextDepartments[0]) setDepartmentId(String(nextDepartments[0].id));
+        setRequestTypes(nextTypes);
+        const nextDepartmentId = nextDepartments[0] ? String(nextDepartments[0].id) : '';
+        setDepartmentId(nextDepartmentId);
+        setRequestTypeId(firstRequestTypeId(nextTypes, nextDepartmentId));
         const firstHandler = nextEmployees.find((employee) => employee.canHandle === true);
         if (firstHandler) setOwnerId(String(firstHandler.id));
       })
@@ -203,26 +278,39 @@ export default function App() {
   }
 
   function applyDraft(result: IntakeResult) {
-    if (result.draft?.departmentId != null) {
-      setDepartmentId(String(result.draft.departmentId));
-    } else {
-      setDepartmentId('');
-    }
+    const nextDepartmentId = result.draft?.departmentId != null ? String(result.draft.departmentId) : '';
+    setDepartmentId(nextDepartmentId);
+    const suggestedType = result.draft?.requestTypeId != null ? String(result.draft.requestTypeId) : '';
+    const matchesDepartment = requestTypes.some(
+      (item) => String(item.id) === suggestedType && String(item.departmentId) === nextDepartmentId,
+    );
+    setRequestTypeId(matchesDepartment ? suggestedType : firstRequestTypeId(requestTypes, nextDepartmentId));
     setTitle(result.draft?.summary ?? '');
     setDescription(result.draft?.description ?? '');
   }
 
   async function submitCreate() {
-    if (user === null || departmentId === '') return;
+    if (user === null || departmentId === '' || requestTypeId === '') return;
     const generation = currentSessionGeneration();
-    const created = await createRequest(user.id, Number(departmentId), title, description);
+    const created = await createRequest(
+      user.id,
+      Number(departmentId),
+      Number(requestTypeId),
+      title,
+      description,
+    );
     if (currentSessionGeneration() !== generation) {
       throw new StaleSessionResult();
     }
     setTitle('');
     setDescription('');
     if (departments[0]) {
-      setDepartmentId(String(departments[0].id));
+      const nextDepartmentId = String(departments[0].id);
+      setDepartmentId(nextDepartmentId);
+      setRequestTypeId(firstRequestTypeId(requestTypes, nextDepartmentId));
+    } else {
+      setDepartmentId('');
+      setRequestTypeId('');
     }
     setIntakeText('');
     setIntakeResult(null);
@@ -255,11 +343,19 @@ export default function App() {
       !request ||
       !user ||
       user.canHandle !== true ||
-      request.status === 'COMPLETED' ||
-      eligibleOwners.length === 0
+      request.status === 'COMPLETED'
     ) {
       return;
     }
+    const eligibleOwners = employees.filter(
+      (employee) => employee.canHandle === true && Number(employee.id) !== Number(request.submittedBy),
+    );
+    if (eligibleOwners.length === 0) {
+      return;
+    }
+    const ownerSelectValue = eligibleOwners.some((employee) => String(employee.id) === ownerId)
+      ? ownerId
+      : String(eligibleOwners[0].id);
     void run(async () => {
       await assignOwner(request.id, Number(ownerSelectValue));
       await refresh(request.id);
@@ -327,13 +423,20 @@ export default function App() {
     void run(async () => {
       const session = await login(email, password);
       const started = applySession(session);
-      const [nextEmployees, nextDepartments] = await Promise.all([getEmployees(), getDepartments()]);
+      const [nextEmployees, nextDepartments, nextTypes] = await Promise.all([
+        getEmployees(),
+        getDepartments(),
+        getRequestTypes(),
+      ]);
       if (currentSessionGeneration() !== started) {
         return;
       }
       setEmployees(nextEmployees);
       setDepartments(nextDepartments);
-      if (nextDepartments[0]) setDepartmentId(String(nextDepartments[0].id));
+      setRequestTypes(nextTypes);
+      const nextDepartmentId = nextDepartments[0] ? String(nextDepartments[0].id) : '';
+      setDepartmentId(nextDepartmentId);
+      setRequestTypeId(firstRequestTypeId(nextTypes, nextDepartmentId));
       const firstHandler = nextEmployees.find((employee) => employee.canHandle === true);
       if (firstHandler) setOwnerId(String(firstHandler.id));
     });
@@ -352,17 +455,44 @@ export default function App() {
     setInviteToken(null);
   }
 
-  async function reloadLookups(generation: number) {
-    const [nextEmployees, nextDepartments] = await Promise.all([getEmployees(), getDepartments()]);
-    if (currentSessionGeneration() !== generation) {
-      return;
-    }
-    setEmployees(nextEmployees);
-    setDepartments(nextDepartments);
-    if (nextDepartments[0]) setDepartmentId(String(nextDepartments[0].id));
-    const firstHandler = nextEmployees.find((employee) => employee.canHandle === true);
-    if (firstHandler) setOwnerId(String(firstHandler.id));
-  }
+  const workspace = user ? (
+    <RequestWorkspace
+      user={user}
+      employees={employees}
+      departments={departments}
+      requestTypes={requestTypes}
+      departmentId={departmentId}
+      setDepartmentId={setDepartmentId}
+      requestTypeId={requestTypeId}
+      setRequestTypeId={setRequestTypeId}
+      title={title}
+      setTitle={setTitle}
+      description={description}
+      setDescription={setDescription}
+      ownerId={ownerId}
+      setOwnerId={setOwnerId}
+      loadId={loadId}
+      setLoadId={setLoadId}
+      request={request}
+      history={history}
+      busy={busy}
+      intakeText={intakeText}
+      setIntakeText={setIntakeText}
+      intakeResult={intakeResult}
+      intakeStep={intakeStep}
+      canSubmitRequest={canSubmitRequest}
+      onCreate={onCreate}
+      onLoad={onLoad}
+      onAssignOwner={onAssignOwner}
+      onTransition={onTransition}
+      onAnalyze={onAnalyze}
+      onProblemSolved={onProblemSolved}
+      onPrepareRequest={onPrepareRequest}
+      resetIntake={resetIntake}
+      showLoadForm={user.role !== 'SUPER_ADMIN'}
+      showDetails={user.role !== 'SUPER_ADMIN'}
+    />
+  ) : null;
 
   if (!ready) {
     return (
@@ -511,6 +641,48 @@ export default function App() {
     );
   }
 
+  if (user.role === 'SUPER_ADMIN') {
+    const adminView = view === 'home' ? 'dashboard' : view;
+    return (
+      <AdminShell user={user} view={adminView} busy={busy} onNavigate={goTo} onLogout={onLogout}>
+        {error ? (
+          <div className="alert" role="alert">
+            {error}
+          </div>
+        ) : null}
+        {adminView === 'dashboard' ? (
+          <DashboardPage onNavigate={goTo} onUnauthorized={clearAccountWorkspace} />
+        ) : null}
+        {adminView === 'employees' ? (
+          <EmployeesPage busy={busy} run={run} onUnauthorized={clearAccountWorkspace} />
+        ) : null}
+        {adminView === 'departments' ? (
+          <DepartmentsPage busy={busy} run={run} onUnauthorized={clearAccountWorkspace} />
+        ) : null}
+        {adminView === 'requests' ? (
+          <AdminRequestsPage
+            createdRequestId={request?.id ?? null}
+            compose={workspace}
+            onUnauthorized={clearAccountWorkspace}
+            urlSearch={urlSearch}
+          />
+        ) : null}
+        {adminView === 'approvals' ? (
+          <ComingLaterPage
+            title="Approvals"
+            detail="The approval inbox is not implemented. This page does not list pending approvals."
+          />
+        ) : null}
+        {adminView === 'settings' ? (
+          <ComingLaterPage
+            title="Settings"
+            detail="Company details are not implemented. Request types and their approval policies are managed on the Departments page. This page has no working controls."
+          />
+        ) : null}
+      </AdminShell>
+    );
+  }
+
   return (
     <div className="page">
       <header className="header">
@@ -531,357 +703,7 @@ export default function App() {
         </div>
       ) : null}
 
-      {user.role === 'SUPER_ADMIN' ? (
-        <CompanyTools
-          departments={departments}
-          busy={busy}
-          run={run}
-          onChanged={async () => {
-            await reloadLookups(currentSessionGeneration());
-          }}
-        />
-      ) : null}
-
-      <section className="card">
-        <h2>Request Intake</h2>
-        <p className="muted">
-          Describe what you need. Suggestions are advisory only; nothing is submitted until you
-          click Create Request.
-        </p>
-
-        {intakeStep === 'input' || intakeStep === 'troubleshoot' || intakeStep === 'offer' ? (
-          <form className="stack" onSubmit={onAnalyze}>
-            <label>
-              What do you need?
-              <textarea
-                value={intakeText}
-                onChange={(event) => setIntakeText(event.target.value)}
-                rows={4}
-                disabled={busy}
-              />
-            </label>
-            <button className="btn-primary" type="submit" disabled={busy}>
-              Analyze
-            </button>
-          </form>
-        ) : null}
-
-        {intakeResult && intakeResult.missingInformation.length > 0 ? (
-          <div className="notice" data-testid="intake-missing-information">
-            <p>Some information is missing:</p>
-            <ul>
-              {intakeResult.missingInformation.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-
-        {intakeSuggestions(intakeResult).length > 0 ? (
-          <div className="notice" data-testid="intake-suggestions">
-            <p>Optional details that may help:</p>
-            <ul>
-              {intakeSuggestions(intakeResult).map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-
-        {intakeResult &&
-        (intakeStep === 'input' || intakeStep === 'troubleshoot' || intakeStep === 'offer') &&
-        (hasMissingRequiredInformation(intakeResult) ||
-          (intakeStep === 'input' && !hasActionableIntakeDraft(intakeResult.draft))) ? (
-          <p className="muted" data-testid="intake-need-more">
-            Please provide the missing details so we can understand your request and help
-            you get it to the right department.
-          </p>
-        ) : null}
-
-        {intakeStep === 'troubleshoot' && intakeResult ? (
-          <div className="stack">
-            <p className="muted">Try these steps first. They are suggestions, not required actions.</p>
-            <ol className="steps" data-testid="troubleshooting-steps">
-              {intakeResult.troubleshootingSteps.map((step) => (
-                <li key={step}>{step}</li>
-              ))}
-            </ol>
-            <p>Did this solve the problem?</p>
-            <div className="actions">
-              <button className="btn-primary" type="button" disabled={busy} onClick={() => onProblemSolved(true)}>
-                Yes, it's solved
-              </button>
-              <button className="btn-secondary" type="button" disabled={busy} onClick={() => onProblemSolved(false)}>
-                No, still unresolved
-              </button>
-            </div>
-          </div>
-        ) : null}
-
-        {intakeStep === 'offer' && !hasMissingRequiredInformation(intakeResult) ? (
-          <div className="stack">
-            {intakeResult?.situation === 'need' ? (
-              <p className="muted">
-                This looks like a straightforward request, so troubleshooting is not needed.
-              </p>
-            ) : (
-              <p className="muted">If the problem is still unresolved, you can prepare a request.</p>
-            )}
-            <p>Do you want to prepare a request?</p>
-            <div className="actions">
-              <button className="btn-primary" type="button" disabled={busy} onClick={() => onPrepareRequest(true)}>
-                Prepare a request
-              </button>
-              <button className="btn-secondary" type="button" disabled={busy} onClick={() => onPrepareRequest(false)}>
-                No thanks
-              </button>
-            </div>
-          </div>
-        ) : null}
-
-        {intakeStep === 'resolved' ? (
-          <div className="stack">
-            <p className="muted">Glad those steps helped. No request was created.</p>
-            <button className="btn-secondary" type="button" onClick={resetIntake}>
-              Describe something else
-            </button>
-          </div>
-        ) : null}
-
-        {intakeStep === 'declined' ? (
-          <div className="stack">
-            <p className="muted">No request was created.</p>
-            <button className="btn-secondary" type="button" onClick={resetIntake}>
-              Describe something else
-            </button>
-          </div>
-        ) : null}
-
-        {intakeStep === 'draft' ? (
-          <form className="stack" onSubmit={onCreate}>
-            <p className="muted">
-              Review and edit this draft. Create Request uses the normal request submission flow.
-            </p>
-            <label>
-              Department
-              <select
-                value={departmentId}
-                onChange={(event) => setDepartmentId(event.target.value)}
-                required
-              >
-                <option value="">Select a department</option>
-                {departments.map((department) => (
-                  <option key={department.id} value={department.id}>
-                    {department.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Title
-              <input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={200} />
-            </label>
-            <label>
-              Description
-              <textarea
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-                rows={4}
-                maxLength={2000}
-              />
-            </label>
-            <div className="actions">
-              <button className="btn-primary" type="submit" disabled={busy || !canSubmitRequest}>
-                Create Request
-              </button>
-              <button className="btn-secondary" type="button" onClick={resetIntake}>
-                Start over
-              </button>
-            </div>
-          </form>
-        ) : null}
-      </section>
-
-      <div className="grid">
-        <section className="card">
-          <h2>Create Request</h2>
-          <p className="muted">
-            Requests are submitted as {user.name}.
-          </p>
-          <form className="stack" onSubmit={onCreate}>
-            <label>
-              Department
-              <select value={departmentId} onChange={(event) => setDepartmentId(event.target.value)}>
-                <option value="">Select a department</option>
-                {departments.map((department) => (
-                  <option key={department.id} value={department.id}>
-                    {department.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Title
-              <input
-                value={title}
-                onChange={(event) => setTitle(event.target.value)}
-                maxLength={200}
-              />
-            </label>
-            <label>
-              Description
-              <textarea
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-                rows={3}
-                maxLength={2000}
-              />
-            </label>
-            <button className="btn-primary" type="submit" disabled={busy || !canSubmitRequest}>
-              Create Request
-            </button>
-          </form>
-        </section>
-
-        <section className="card">
-          <h2>Load Request</h2>
-          <p className="muted">Open an existing request by its ID.</p>
-          <form className="stack" onSubmit={onLoad}>
-            <label>
-              Request ID
-              <input
-                value={loadId}
-                onChange={(event) => setLoadId(event.target.value)}
-                inputMode="numeric"
-              />
-            </label>
-            <button className="btn-secondary" type="submit" disabled={busy}>
-              Load Request
-            </button>
-          </form>
-        </section>
-      </div>
-
-      {request ? (
-        <>
-          <section className="card">
-            <div className="card-heading">
-              <h2>Request Details</h2>
-              <span className={statusClass(request.status)} data-testid="request-status">
-                {request.status.replace('_', ' ')}
-              </span>
-            </div>
-            <dl className="details">
-              <div>
-                <dt>Request ID</dt>
-                <dd data-testid="request-id">#{request.id}</dd>
-              </div>
-              <div>
-                <dt>Submitter</dt>
-                <dd>{request.submitter.name}</dd>
-              </div>
-              <div>
-                <dt>Department</dt>
-                <dd>{request.department.name}</dd>
-              </div>
-              <div>
-                <dt>Owner</dt>
-                <dd>{request.currentOwner ? request.currentOwner.name : 'Unassigned'}</dd>
-              </div>
-              <div>
-                <dt>Status</dt>
-                <dd>{request.status.replace('_', ' ')}</dd>
-              </div>
-              <div>
-                <dt>Title</dt>
-                <dd>{request.title ? request.title : '—'}</dd>
-              </div>
-              <div className="details-wide">
-                <dt>Description</dt>
-                <dd>{request.description ? request.description : '—'}</dd>
-              </div>
-            </dl>
-
-            {canHandle ? (
-              <>
-                {request.status !== 'COMPLETED' ? (
-                  eligibleOwners.length === 0 ? (
-                    <p className="muted">No eligible handlers available</p>
-                  ) : (
-                    <form className="inline-form" onSubmit={onAssignOwner}>
-                      <label>
-                        Assign owner
-                        <select
-                          value={ownerSelectValue}
-                          onChange={(event) => setOwnerId(event.target.value)}
-                          disabled={busy}
-                        >
-                          {eligibleOwners.map((employee) => (
-                            <option key={employee.id} value={employee.id}>
-                              {employee.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <button className="btn-secondary" type="submit" disabled={busy}>
-                        Assign owner
-                      </button>
-                    </form>
-                  )
-                ) : null}
-
-                <div className="actions">
-                  {request.currentOwnerId === null && request.status !== 'COMPLETED' ? (
-                    <p className="muted">Assign an owner before work can start.</p>
-                  ) : null}
-
-                  {isCurrentOwner && request.status === 'SUBMITTED' ? (
-                    <button
-                      className="btn-primary"
-                      type="button"
-                      disabled={busy}
-                      onClick={() => onTransition('IN_PROGRESS')}
-                    >
-                      Start Request
-                    </button>
-                  ) : null}
-
-                  {isCurrentOwner && request.status === 'IN_PROGRESS' ? (
-                    <button
-                      className="btn-primary"
-                      type="button"
-                      disabled={busy}
-                      onClick={() => onTransition('COMPLETED')}
-                    >
-                      Complete Request
-                    </button>
-                  ) : null}
-                </div>
-              </>
-            ) : null}
-          </section>
-
-          <section className="card">
-            <h2>Status History</h2>
-            {history.length === 0 ? (
-              <p className="muted">No successful status changes yet.</p>
-            ) : (
-              <ol className="timeline" data-testid="status-history">
-                {history.map((record) => (
-                  <li key={record.id}>
-                    <strong>
-                      {record.previousStatus.replace('_', ' ')} → {record.newStatus.replace('_', ' ')}
-                    </strong>
-                    <span>
-                      by {record.changedByEmployee.name} · {formatWhen(record.changedAt)}
-                    </span>
-                  </li>
-                ))}
-              </ol>
-            )}
-          </section>
-        </>
-      ) : null}
+      {workspace}
     </div>
   );
 }

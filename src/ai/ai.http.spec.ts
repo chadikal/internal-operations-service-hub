@@ -33,7 +33,8 @@ describe('AI intake HTTP boundary', () => {
       expect(response.body.situation).toBe('need');
       expect(response.body.troubleshootingSteps).toEqual([]);
       expect(response.body.draft.departmentId).toBe(1);
-      expect(response.body).not.toHaveProperty('status');
+      expect(response.body.draft.requestTypeId).toBe(1);
+      expect(JSON.stringify(response.body)).not.toMatch(/approvalPolicy/);
       expect(response.body).not.toHaveProperty('currentOwnerId');
       expect(await countAuthoritativeRows(prisma)).toEqual({ requests: 0, history: 0 });
     } finally {
@@ -48,6 +49,39 @@ describe('AI intake HTTP boundary', () => {
         situation: 'need',
         draft: { departmentId: 999 },
         status: 'COMPLETED',
+      }),
+    });
+    try {
+      await cleanRequestData(prisma);
+
+      const response = await request(app.getHttpServer())
+        .post('/ai/intake')
+        .set(await authHeaders(app, prisma, JOHN))
+        .send({ text: 'I need a laptop.' });
+
+      expect(response.status).toBe(502);
+      expect(response.body.message).toMatch(/invalid result/i);
+      expect(await countAuthoritativeRows(prisma)).toEqual({ requests: 0, history: 0 });
+    } finally {
+      await cleanRequestData(prisma);
+      await closeTestApp(app);
+    }
+  });
+
+  it('rejects a draft that tries to set approval policy', async () => {
+    const { app, prisma } = await createTestApp({
+      complete: async () => ({
+        situation: 'need',
+        troubleshootingSteps: [],
+        missingInformation: [],
+        suggestions: [],
+        draft: {
+          departmentId: 1,
+          requestTypeId: 1,
+          summary: 'Laptop',
+          description: 'I need a laptop.',
+          approvalPolicy: 'SUPER_ADMIN',
+        },
       }),
     });
     try {

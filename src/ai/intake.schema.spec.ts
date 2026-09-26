@@ -80,6 +80,7 @@ describe('validateIntakeResult', () => {
 
     expect(result.draft).toEqual({
       departmentId: 2,
+      requestTypeId: null,
       summary: 'Employment certificate',
       description: 'I need an employment certificate from HR.',
     });
@@ -141,6 +142,7 @@ describe('validateIntakeResult', () => {
     expect(
       isActionableIntakeDraft({
         departmentId: 1,
+        requestTypeId: 10,
         summary: 'Laptop request',
         description: 'I need a laptop.',
       }),
@@ -158,5 +160,95 @@ describe('validateIntakeResult', () => {
         ALLOWED,
       ),
     ).toThrow(InvalidAiOutputError);
+  });
+
+  it('rejects an unexpected approvalPolicy field on the draft', () => {
+    expect(() =>
+      validateIntakeResult(
+        {
+          situation: 'need',
+          troubleshootingSteps: [],
+          missingInformation: [],
+          draft: {
+            departmentId: 1,
+            requestTypeId: 10,
+            summary: 'Laptop',
+            description: 'I need a laptop.',
+            approvalPolicy: 'SUPER_ADMIN',
+          },
+        },
+        ALLOWED,
+        'I need a laptop.',
+        [{ id: 10, departmentId: 1 }],
+      ),
+    ).toThrow(InvalidAiOutputError);
+  });
+
+  it('nulls a request type that is unknown or belongs to another department', () => {
+    const unknown = validateIntakeResult(
+      {
+        situation: 'need',
+        troubleshootingSteps: [],
+        missingInformation: [],
+        draft: {
+          departmentId: 1,
+          requestTypeId: 999,
+          summary: 'Laptop request',
+          description: 'I need a laptop.',
+        },
+      },
+      ALLOWED,
+      'I need a laptop.',
+      [{ id: 10, departmentId: 1 }],
+    );
+    expect(unknown.draft?.requestTypeId).toBeNull();
+    expect(unknown.missingInformation.some((item) => /allowed types/i.test(item))).toBe(true);
+
+    const mismatch = validateIntakeResult(
+      {
+        situation: 'need',
+        troubleshootingSteps: [],
+        missingInformation: [],
+        draft: {
+          departmentId: 1,
+          requestTypeId: 20,
+          summary: 'Laptop request',
+          description: 'I need a laptop.',
+        },
+      },
+      ALLOWED,
+      'I need a laptop.',
+      [
+        { id: 10, departmentId: 1 },
+        { id: 20, departmentId: 2 },
+      ],
+    );
+    expect(mismatch.draft?.departmentId).toBe(1);
+    expect(mismatch.draft?.requestTypeId).toBeNull();
+  });
+
+  it('keeps a request type that belongs to the chosen department', () => {
+    const result = validateIntakeResult(
+      {
+        situation: 'need',
+        troubleshootingSteps: [],
+        missingInformation: [],
+        draft: {
+          departmentId: 1,
+          requestTypeId: 10,
+          summary: 'Laptop request',
+          description: 'I need a laptop.',
+        },
+      },
+      ALLOWED,
+      'I need a laptop.',
+      [{ id: 10, departmentId: 1 }],
+    );
+    expect(result.draft).toEqual({
+      departmentId: 1,
+      requestTypeId: 10,
+      summary: 'Laptop request',
+      description: 'I need a laptop.',
+    });
   });
 });

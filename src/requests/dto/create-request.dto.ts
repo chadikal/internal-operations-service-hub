@@ -9,6 +9,10 @@ export class CreateRequestDto {
   @Min(1)
   departmentId: number;
 
+  @IsInt()
+  @Min(1)
+  requestTypeId: number;
+
   @IsOptional()
   @IsString()
   @MaxLength(200)

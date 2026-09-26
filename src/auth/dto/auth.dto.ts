@@ -1,5 +1,6 @@
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
+  IsArray,
   IsBoolean,
   IsIn,
   IsInt,
@@ -8,7 +9,9 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
+import { DEPARTMENT_TEMPLATE_IDS } from '../department-templates';
 
 const invalidLoginCredential = Object.freeze({ invalidLoginCredential: true });
 
@@ -126,10 +129,74 @@ export class InviteStaffDto {
   canHandle!: boolean;
 }
 
+export class ConfirmedRequestTypeDto {
+  @Transform(trimmedString)
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  name!: string;
+
+  @IsIn(['NONE', 'DEPARTMENT_ADMIN', 'SUPER_ADMIN'])
+  approvalPolicy!: 'NONE' | 'DEPARTMENT_ADMIN' | 'SUPER_ADMIN';
+}
+
 export class CreateDepartmentDto {
   @Transform(trimmedString)
   @IsString()
   @MinLength(1)
   @MaxLength(200)
   name!: string;
+
+  @IsOptional()
+  @IsIn([...DEPARTMENT_TEMPLATE_IDS])
+  templateId?: (typeof DEPARTMENT_TEMPLATE_IDS)[number];
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ConfirmedRequestTypeDto)
+  requestTypes?: ConfirmedRequestTypeDto[];
+}
+
+export class UpdateDepartmentDto {
+  @Transform(trimmedString)
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  name!: string;
+}
+
+export class ApplyDepartmentTemplateDto {
+  @IsOptional()
+  @IsIn([...DEPARTMENT_TEMPLATE_IDS])
+  templateId?: (typeof DEPARTMENT_TEMPLATE_IDS)[number];
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ConfirmedRequestTypeDto)
+  requestTypes!: ConfirmedRequestTypeDto[];
+}
+
+export class CreateRequestTypeDto {
+  @Transform(trimmedString)
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  name!: string;
+
+  @IsIn(['NONE', 'DEPARTMENT_ADMIN', 'SUPER_ADMIN'])
+  approvalPolicy!: 'NONE' | 'DEPARTMENT_ADMIN' | 'SUPER_ADMIN';
+}
+
+export class UpdateRequestTypeDto {
+  @IsOptional()
+  @Transform(trimmedString)
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  name?: string;
+
+  @IsOptional()
+  @IsIn(['NONE', 'DEPARTMENT_ADMIN', 'SUPER_ADMIN'])
+  approvalPolicy?: 'NONE' | 'DEPARTMENT_ADMIN' | 'SUPER_ADMIN';
 }

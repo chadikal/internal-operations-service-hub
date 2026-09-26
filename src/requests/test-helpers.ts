@@ -11,6 +11,10 @@ export const CHADI = 1;
 export const JOHN = 2;
 export const IT = 1;
 export const HR = 2;
+export const FINANCE = 3;
+export const IT_TYPE = 1;
+export const HR_TYPE = 2;
+export const FINANCE_TYPE = 3;
 export const TEST_PASSWORD = 'test-password-not-for-production-use-12';
 export const JOHN_EMAIL = 'john@operations-hub.test';
 export const CHADI_EMAIL = 'chadi@operations-hub.test';
@@ -32,9 +36,59 @@ export async function ensureTestCredentials(prisma: PrismaService) {
         where: { id: JOHN },
         data: { email: JOHN_EMAIL, passwordHash },
       });
+      await ensureDevelopmentRequestTypes(prisma);
     })();
   }
   await credentialsReady;
+}
+
+export async function ensureDevelopmentRequestTypes(prisma: PrismaService) {
+  const companyId = await developmentCompanyId(prisma);
+  const defaults: Array<{ id: number; departmentId: number; name: string }> = [
+    { id: IT_TYPE, departmentId: IT, name: 'General' },
+    { id: HR_TYPE, departmentId: HR, name: 'General' },
+    { id: FINANCE_TYPE, departmentId: FINANCE, name: 'General' },
+  ];
+  for (const row of defaults) {
+    await prisma.requestType.upsert({
+      where: { id: row.id },
+      update: {
+        name: row.name,
+        approvalPolicy: 'NONE',
+        departmentId: row.departmentId,
+        companyId,
+      },
+      create: {
+        id: row.id,
+        name: row.name,
+        approvalPolicy: 'NONE',
+        departmentId: row.departmentId,
+        companyId,
+      },
+    });
+  }
+  await prisma.$executeRawUnsafe(
+    `SELECT setval(pg_get_serial_sequence('"RequestType"', 'id'), COALESCE((SELECT MAX(id) FROM "RequestType"), 1))`,
+  );
+}
+
+export async function createTestRequestType(
+  app: INestApplication,
+  headers: Record<string, string>,
+  departmentId: number,
+  name = 'General',
+  approvalPolicy: 'NONE' | 'DEPARTMENT_ADMIN' | 'SUPER_ADMIN' = 'NONE',
+): Promise<{ id: number; name: string; approvalPolicy: string; departmentId: number }> {
+  const created = await request(app.getHttpServer())
+    .post(`/departments/${departmentId}/request-types`)
+    .set(headers)
+    .send({ name, approvalPolicy });
+  if (created.status !== 201) {
+    throw new Error(
+      `Creating a request type failed: ${created.status} ${JSON.stringify(created.body)}`,
+    );
+  }
+  return created.body;
 }
 
 export function sessionCookieFrom(response: { headers: Record<string, unknown> }): string {
@@ -139,6 +193,7 @@ export async function removeNonDevelopmentCompanies(prisma: PrismaService) {
   await prisma.session.deleteMany({ where: { companyId: { in: companyIds } } });
   await prisma.requestStatusHistory.deleteMany({ where: { companyId: { in: companyIds } } });
   await prisma.request.deleteMany({ where: { companyId: { in: companyIds } } });
+  await prisma.requestType.deleteMany({ where: { companyId: { in: companyIds } } });
   await prisma.employee.deleteMany({ where: { companyId: { in: companyIds } } });
   await prisma.department.deleteMany({ where: { companyId: { in: companyIds } } });
   await prisma.company.deleteMany({ where: { id: { in: companyIds } } });

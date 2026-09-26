@@ -17,6 +17,37 @@ export type Department = {
   name: string;
 };
 
+export type ApprovalPolicy = 'NONE' | 'DEPARTMENT_ADMIN' | 'SUPER_ADMIN';
+
+export type RequestType = {
+  id: number;
+  departmentId: number;
+  name: string;
+  approvalPolicy: ApprovalPolicy;
+};
+
+export type DepartmentTemplateId =
+  | 'IT'
+  | 'HR'
+  | 'FINANCE'
+  | 'OPERATIONS'
+  | 'MARKETING'
+  | 'FACILITIES'
+  | 'CUSTOM_EMPTY';
+
+export type TemplateSuggestion = {
+  name: string;
+  approvalPolicy: ApprovalPolicy;
+};
+
+export type DepartmentTemplate = {
+  id: DepartmentTemplateId;
+  name: string;
+  suggestions: TemplateSuggestion[];
+  suggestionsRecorded: boolean;
+  unspecifiedNotice: string | null;
+};
+
 export type SessionUser = {
   id: number;
   name: string;
@@ -34,6 +65,8 @@ export type ServiceRequest = {
   id: number;
   submittedBy: number;
   departmentId: number;
+  requestTypeId: number | null;
+  capturedApprovalPolicy: ApprovalPolicy | null;
   currentOwnerId: number | null;
   status: 'SUBMITTED' | 'IN_PROGRESS' | 'COMPLETED';
   statusUpdatedAt: string;
@@ -41,6 +74,7 @@ export type ServiceRequest = {
   description: string | null;
   submitter: NamedRef;
   department: NamedRef;
+  requestType: NamedRef | null;
   currentOwner: NamedRef | null;
 };
 
@@ -56,6 +90,7 @@ export type HistoryRecord = {
 
 export type IntakeDraft = {
   departmentId: number | null;
+  requestTypeId: number | null;
   summary: string | null;
   description: string | null;
 };
@@ -175,9 +210,39 @@ export function getDepartments() {
   return send<Department[]>('/departments');
 }
 
+export function getRequestTypes() {
+  return send<RequestType[]>('/request-types');
+}
+
+export function getDepartmentTemplates() {
+  return send<DepartmentTemplate[]>('/department-templates');
+}
+
+export function getDepartmentTemplate(id: DepartmentTemplateId) {
+  return send<DepartmentTemplate>(`/department-templates/${id}`);
+}
+
+export function createRequestType(departmentId: number, name: string, approvalPolicy: ApprovalPolicy) {
+  return send<RequestType>(`/departments/${departmentId}/request-types`, {
+    method: 'POST',
+    body: JSON.stringify({ name, approvalPolicy }),
+  });
+}
+
+export function updateRequestType(
+  id: number,
+  input: { name?: string; approvalPolicy?: ApprovalPolicy },
+) {
+  return send<RequestType>(`/request-types/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+}
+
 export function createRequest(
   submittedBy: number,
   departmentId: number,
+  requestTypeId: number,
   title?: string,
   description?: string,
 ) {
@@ -188,6 +253,7 @@ export function createRequest(
     body: JSON.stringify({
       submittedBy,
       departmentId,
+      requestTypeId,
       ...(trimmedTitle ? { title: trimmedTitle } : {}),
       ...(trimmedDescription ? { description: trimmedDescription } : {}),
     }),
@@ -244,10 +310,40 @@ export function acceptInvitation(token: string, password: string) {
   });
 }
 
-export function createDepartment(name: string) {
-  return send<Department>('/departments', {
+export function createDepartment(
+  name: string,
+  input?: { templateId?: DepartmentTemplateId; requestTypes?: TemplateSuggestion[] },
+) {
+  return send<Department & { requestTypes?: RequestType[] }>('/departments', {
     method: 'POST',
+    body: JSON.stringify({
+      name,
+      ...(input?.templateId ? { templateId: input.templateId } : {}),
+      ...(input?.requestTypes ? { requestTypes: input.requestTypes } : {}),
+    }),
+  });
+}
+
+export function applyDepartmentTemplateTypes(
+  departmentId: number,
+  input: { templateId?: DepartmentTemplateId; requestTypes: TemplateSuggestion[] },
+) {
+  return send<Department & { requestTypes: RequestType[] }>(`/departments/${departmentId}/template-types`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateDepartment(id: number, name: string) {
+  return send<Department>(`/departments/${id}`, {
+    method: 'PATCH',
     body: JSON.stringify({ name }),
+  });
+}
+
+export function deleteDepartment(id: number) {
+  return send<{ deleted: true }>(`/departments/${id}`, {
+    method: 'DELETE',
   });
 }
 
@@ -262,4 +358,95 @@ export function inviteStaff(input: {
     method: 'POST',
     body: JSON.stringify(input),
   });
+}
+
+export type DashboardCounts = {
+  employees: number;
+  departments: number;
+  requests: number;
+  submitted: number;
+  inProgress: number;
+  completed: number;
+  activeRequests: number;
+};
+
+export type CompanyEmployee = {
+  id: number;
+  name: string;
+  email: string | null;
+  department: { id: number; name: string } | null;
+  role: 'EMPLOYEE' | 'DEPARTMENT_ADMIN' | 'SUPER_ADMIN' | string;
+  canHandle: boolean;
+  active: boolean;
+};
+
+export type EmployeeListFilters = {
+  q?: string;
+  departmentId?: number;
+  role?: 'EMPLOYEE' | 'DEPARTMENT_ADMIN' | 'SUPER_ADMIN' | '';
+  canHandle?: '' | 'true' | 'false';
+  active?: '' | 'true' | 'false';
+};
+
+export function getDashboardCounts() {
+  return send<DashboardCounts>('/admin/dashboard');
+}
+
+export function getCompanyEmployees(filters: EmployeeListFilters = {}) {
+  const params = new URLSearchParams();
+  const q = filters.q?.trim();
+  if (q) params.set('q', q);
+  if (filters.departmentId) params.set('departmentId', String(filters.departmentId));
+  if (filters.role) params.set('role', filters.role);
+  if (filters.canHandle === 'true' || filters.canHandle === 'false') {
+    params.set('canHandle', filters.canHandle);
+  }
+  if (filters.active === 'true' || filters.active === 'false') {
+    params.set('active', filters.active);
+  }
+  const query = params.toString();
+  return send<CompanyEmployee[]>(query ? `/admin/employees?${query}` : '/admin/employees');
+}
+
+export type CompanyRequestListItem = {
+  id: number;
+  title: string | null;
+  status: ServiceRequest['status'];
+  submitter: { name: string };
+  submitterDepartment: { name: string } | null;
+  department: { name: string };
+  mine: boolean;
+};
+
+export type CompanyRequestList = {
+  items: CompanyRequestListItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
+export type CompanyRequestFilters = {
+  scope?: 'all' | 'mine';
+  departmentId?: number;
+  status?: '' | 'ACTIVE' | 'SUBMITTED' | 'IN_PROGRESS' | 'COMPLETED';
+  assignment?: '' | 'all' | 'unassigned' | 'assigned';
+  q?: string;
+  page?: number;
+  pageSize?: number;
+};
+
+export function getCompanyRequests(filters: CompanyRequestFilters = {}) {
+  const params = new URLSearchParams();
+  if (filters.scope === 'mine') params.set('scope', 'mine');
+  if (filters.departmentId) params.set('departmentId', String(filters.departmentId));
+  if (filters.status) params.set('status', filters.status);
+  if (filters.assignment === 'unassigned' || filters.assignment === 'assigned') {
+    params.set('assignment', filters.assignment);
+  }
+  const q = filters.q?.trim();
+  if (q) params.set('q', q);
+  if (filters.page && filters.page > 1) params.set('page', String(filters.page));
+  if (filters.pageSize) params.set('pageSize', String(filters.pageSize));
+  const query = params.toString();
+  return send<CompanyRequestList>(query ? `/admin/requests?${query}` : '/admin/requests');
 }

@@ -3,19 +3,21 @@ import {
   AiDepartmentContext,
   AiProvider,
   AiProviderInput,
+  AiRequestTypeContext,
 } from './ai-provider';
 import { IntakeResult } from './intake.schema';
 
 @Injectable()
 export class MockAiProvider implements AiProvider {
   async complete(input: AiProviderInput): Promise<IntakeResult> {
-    return buildMockIntakeOutput(input.employeeText, input.departments);
+    return buildMockIntakeOutput(input.employeeText, input.departments, input.requestTypes);
   }
 }
 
 export function buildMockIntakeOutput(
   employeeText: string,
   departments: AiDepartmentContext[],
+  requestTypes: AiRequestTypeContext[] = [],
 ): IntakeResult {
   const text = employeeText.trim();
   const lower = text.toLowerCase();
@@ -76,6 +78,7 @@ export function buildMockIntakeOutput(
       ],
       draft: {
         departmentId: hrId,
+        requestTypeId: requestTypeIdFor(requestTypes, hrId),
         summary: 'Employment certificate',
         description: text,
       },
@@ -98,6 +101,7 @@ export function buildMockIntakeOutput(
       suggestions: [],
       draft: {
         departmentId: itId,
+        requestTypeId: requestTypeIdFor(requestTypes, itId),
         summary: 'Laptop cannot connect to Wi-Fi',
         description: text,
       },
@@ -112,6 +116,7 @@ export function buildMockIntakeOutput(
       suggestions: [],
       draft: {
         departmentId: itId,
+        requestTypeId: requestTypeIdFor(requestTypes, itId),
         summary: 'Laptop request',
         description: text,
       },
@@ -127,6 +132,17 @@ export function buildMockIntakeOutput(
     suggestions: [],
     draft: null,
   };
+}
+
+function requestTypeIdFor(
+  requestTypes: AiRequestTypeContext[],
+  departmentId: number | null,
+): number | null {
+  if (departmentId == null) {
+    return null;
+  }
+  const match = requestTypes.find((item) => item.departmentId === departmentId);
+  return match ? match.id : null;
 }
 
 function departmentIdByName(

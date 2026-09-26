@@ -28,6 +28,11 @@ export class AiService {
       select: { id: true, name: true },
       orderBy: { id: 'asc' },
     });
+    const requestTypes = await this.prisma.requestType.findMany({
+      where: { companyId: actor.companyId },
+      select: { id: true, name: true, departmentId: true },
+      orderBy: { id: 'asc' },
+    });
     const allowedDepartmentIds = new Set(departments.map((department) => department.id));
 
     let raw: unknown;
@@ -35,9 +40,11 @@ export class AiService {
       raw = await this.provider.complete({
         employeeText: text,
         departments,
+        requestTypes,
       });
     } catch (error) {
       if (error instanceof InvalidAiOutputError) {
+        this.logger.error(`Requesty intake invalid output: ${error.message}`);
         throw new BadGatewayException('The intake assistant returned an invalid result.');
       }
       const detail = error instanceof Error ? error.message : 'Requesty request failed';
@@ -51,9 +58,12 @@ export class AiService {
     }
 
     try {
-      return validateIntakeResult(raw, allowedDepartmentIds, text);
+      return validateIntakeResult(raw, allowedDepartmentIds, text, requestTypes);
     } catch (error) {
       if (error instanceof InvalidAiOutputError) {
+        this.logger.error(
+          `Requesty intake invalid output: ${error.message}; ${summarizePayload(raw)}`,
+        );
         throw new BadGatewayException('The intake assistant returned an invalid result.');
       }
       throw error;
@@ -70,4 +80,14 @@ export class AiService {
     }
     return actor;
   }
+}
+
+function summarizePayload(raw: unknown): string {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return `payloadType=${raw === null ? 'null' : Array.isArray(raw) ? 'array' : typeof raw}`;
+  }
+  const record = raw as Record<string, unknown>;
+  const situation =
+    record.situation === 'problem' || record.situation === 'need' ? record.situation : 'other';
+  return `payloadKeys=${Object.keys(record).sort().join(',') || 'none'} situation=${situation}`;
 }

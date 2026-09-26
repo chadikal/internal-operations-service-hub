@@ -8,6 +8,7 @@ import {
   closeTestApp,
   createTestApp,
   IT,
+  IT_TYPE,
   JOHN,
 } from './test-helpers';
 
@@ -35,7 +36,7 @@ describe('Request persistence', () => {
     const created = await request(app.getHttpServer())
       .post('/requests')
       .set(await authHeaders(app, prisma, JOHN))
-      .send({ submittedBy: JOHN, departmentId: IT });
+      .send({ submittedBy: JOHN, departmentId: IT, requestTypeId: IT_TYPE });
     expect(created.status).toBe(201);
     const id = created.body.id as number;
 
@@ -76,6 +77,7 @@ describe('Request persistence', () => {
       .send({
         submittedBy: JOHN,
         departmentId: IT,
+        requestTypeId: IT_TYPE,
         title: 'Laptop request',
         description: 'I need a laptop for development work.',
       });
@@ -92,7 +94,7 @@ describe('Request persistence', () => {
     const omitted = await request(app.getHttpServer())
       .post('/requests')
       .set(await authHeaders(app, prisma, JOHN))
-      .send({ submittedBy: JOHN, departmentId: IT });
+      .send({ submittedBy: JOHN, departmentId: IT, requestTypeId: IT_TYPE });
     expect(omitted.status).toBe(201);
     expect(omitted.body.title).toBeNull();
     expect(omitted.body.description).toBeNull();

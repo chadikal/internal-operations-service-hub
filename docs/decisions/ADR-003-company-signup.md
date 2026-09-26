@@ -1,14 +1,20 @@
 # ADR-003: Company signup and company-scoped access
 
-Status: **implemented** on `feature/full-product-foundation`. This decision replaces the first-Super-Admin command as the normal onboarding path. It does not rewrite ADR-002 or the weekly notes. Claiming, approvals, admin screens, password reset, and deployment hosting stay open in `docs/product-spec.md`.
+Status: **implemented** on `feature/full-product-foundation`. This decision replaces the first-Super-Admin command as the normal onboarding path. It does not rewrite ADR-002 or the weekly notes. The Super Admin workspace (dashboard, employees, departments, and the company request list) is implemented for that company. Claiming, the approval inbox, and Settings are confirmed planned and not built. Password reset and deployment hosting remain unresolved in `docs/product-spec.md`.
+
+**25 September 2026 — current product, not a rewrite of this slice.** Signup creates a `PENDING` company with ordinary IT, HR, and Finance departments in the same transaction. Super Admin may still add departments with free-text `POST /departments`, optionally `templateId` and confirmed `requestTypes`, rename with `PATCH /departments/:id`, and delete unused ones with `DELETE /departments/:id`. Occupied departments return **409**. Existing companies are not backfilled. Super Admin manages request types on the Departments page (`POST /departments/:id/request-types`, `PATCH /request-types/:id`) and may preview templates (`GET /department-templates`) then apply confirmed types (`POST /departments/:id/template-types`). Signup does not create types. Optional templates (IT, HR, Finance, Operations, Marketing, Facilities, Custom/Empty) keep the display name independent of the template; Super Admin reviews suggested types and policies before they apply. The catalog in `docs/product-spec.md` is a recommendation. Signup does not auto-apply types. **Confirmed (planned), not this slice:** approval decisions that use the captured snapshot.
+
+A later pass added a company-wide Requests list. `GET /admin/requests` is Super Admin-only and scoped to the caller’s company. **Implemented (25 September 2026 oversight slice):** that list returns ID, submitter name, title, submitter department, destination department, status, and `mine`. Opening full detail uses `GET /requests/:id` and `GET /requests/:id/history` only for requests that Super Admin submitted. Unrelated same-company ids are **403**. Another company’s request id still returns **404**. **Finished product:** also allow those GET routes for requests they are eligible to decide in the Super Admin approval inbox; do not restore company-wide body access. They may submit. They cannot become current owner, including through `PATCH /requests/:id/owner`, and they cannot assign or transition. When approvals exist they may approve or deny a request whose captured policy is `SUPER_ADMIN` except a request they submitted; that is not handling. Self-approval is never an implicit fallback. Approval ships before staff self-claim. Other roles keep the temporary `canHandle` or submitter rule and cannot call the company-wide list. Unassigned on this list is not claimable. Manual assignment remains the temporary owner path for eligible non-Super-Admin handlers until self-claim is built.
 
 ## Decision
 
-A founder creates one company workspace with a company name, their name, their email, and a password. The workspace and that first Super Admin account stay inactive until the founder verifies the email. After verification, the Super Admin can add departments in that company and invite staff. Invitees set their own passwords. There is no public employee signup and no question about working alone or in a team.
+A founder creates one company workspace with a company name, their name, their email, and a password. The workspace and that first Super Admin account stay inactive until the founder verifies the email. Signup inserts ordinary IT, HR, and Finance departments for that company. After verification, the Super Admin can add, rename, or delete unused departments in that company and invite staff. Invitees set their own passwords. There is no public employee signup and no question about working alone or in a team.
 
 Super Admin authority is limited to that company. Accounts, departments, requests, sessions, status history, invitations, and email verifications carry a company boundary. Backend queries and authorization include that boundary on request, history, lookup, and AI intake routes. A caller in company A cannot read or change company B’s data by sending B’s ids.
 
-This slice does not turn a company Super Admin into a viewer of every request in the company. The temporary rule remains: view a request in your own company when you submitted it or `canHandle` is true. The planned “Super Admin sees every request” rule, once built, applies only inside that company. It is not implemented here, and it is not global.
+A later pass added a company-wide Requests list for that Super Admin. `GET /admin/requests` is Super Admin-only and scoped to the caller’s company. Opening a row uses `GET /requests/:id` and `GET /requests/:id/history`; a Super Admin in that company can view those without `canHandle`. They may submit. They cannot become current owner, including through `PATCH /requests/:id/owner`, and they cannot assign or transition. When approvals exist they may approve or deny, which is not handling. Another company’s request id still returns **404**. Other roles keep the temporary `canHandle` or submitter rule and cannot call the company-wide list. Unassigned on this list is not claimable. Manual assignment remains the temporary owner path for eligible non-Super-Admin handlers until self-claim is built.
+
+That later-pass paragraph records the first Requests list. The 25 September 2026 oversight slice above is current: limited list columns and Super Admin detail/history for own submissions only.
 
 ## Migration plan
 
@@ -41,7 +47,7 @@ These are implementation choices, not confirmed product rules. Change them when 
 - A person belongs to **one company**. `Employee.email` stays globally unique, so the same email cannot join a second company.
 - **Duplicate company names are allowed.** The company id is the identity.
 - The migrated workspace is named **Development** and is `ACTIVE`.
-- The founder’s `departmentId` is null. Staff invitations require a department in that company, so the Super Admin can `POST /departments` before inviting. That endpoint is not a department-admin screen.
+- The founder’s `departmentId` is null. Staff invitations require a department in that company, so the Super Admin can `POST /departments` before inviting. The Super Admin Departments page uses that action, manages request types, and reviews optional department templates. It is not a Settings screen.
 - Verification and acceptance do not sign the person in.
 - An invitation reserves the email by creating an inactive account with no password hash. Acceptance sets the hash and `active=true`.
 - A Super Admin may invite Employee, Department Admin, or Super Admin. The new Super Admin is scoped to the same company and does not gain access to other companies.
@@ -56,7 +62,7 @@ These are implementation choices, not confirmed product rules. Change them when 
 - **Multiple-company membership.** This slice forbids it. Whether one person may belong to several companies later is undecided.
 - **Duplicate company names.** This slice allows them. Whether names must be unique is undecided.
 - Signup and invitation-acceptance throttling.
-- Password reset, deployment hosting, claiming, approvals, and the other open items in `docs/product-spec.md`.
+- Password reset and deployment hosting remain unresolved in `docs/product-spec.md`. Claiming and the approval inbox are confirmed planned there, not unknown. Approval ships before self-claim.
 
 ## Still rejected
 
@@ -78,3 +84,9 @@ These are implementation choices, not confirmed product rules. Change them when 
 | `npm run test:e2e` | 7 Playwright tests passed (2 login, 1 company signup, 3 intake, 1 request flow) |
 
 A later pass the same day closed production mail delivery and removed `GET /auth/test/outbox`. `npx jest src/auth/company.spec.ts --testTimeout=60000` passed 1 suite and 9 tests. `npx jest src/auth/auth.spec.ts --testTimeout=60000` passed 1 suite and 17 tests. `npm run build` passed. `cd frontend; npm run build` passed. `npx playwright test e2e/company-signup.spec.ts` passed. Neither database was reset. `.env` was not modified.
+
+A later pass the same day added the company Super Admin workspace (dashboard counts, employee list, departments). `npm test` passed 12 suites and 83 tests. `npm run build` passed. `cd frontend; npm run build` passed. `npm run test:e2e` passed 10 Playwright tests, including Super Admin navigation and the employee list. Neither database was reset. `.env` was not modified.
+
+A later pass the same day added Super Admin viewing without ownership: Super Admin cannot become current owner, including through temporary assignment, and the Requests page has no assign or work-status actions. `npm test` passed 12 suites and 84 tests. `npm run build` passed. `cd frontend; npm run build` passed. `npm run test:e2e` passed 11 Playwright tests. Neither database was reset. `.env` was not modified. `npm run eval:ai` was not re-run; intake code did not change.
+
+A later pass on 25 September 2026 limited Super Admin request oversight: list columns only, own-submission detail/history, **403** for unrelated same-company ids. `npm test` passed 13 suites and 89 tests. `npm run build` passed. `cd frontend; npm run build` passed. `npm run test:e2e` passed 12 Playwright tests. Neither database was reset. `.env` was not modified. `npm run eval:ai` was not re-run; intake code did not change.

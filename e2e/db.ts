@@ -39,6 +39,7 @@ export async function removeSignupCompanies() {
     await prisma.session.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.requestStatusHistory.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.request.deleteMany({ where: { companyId: { in: companyIds } } });
+    await prisma.requestType.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.employee.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.department.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.company.deleteMany({ where: { id: { in: companyIds } } });
@@ -76,6 +77,39 @@ export async function ensureTestLogins() {
       where: { id: 2 },
       data: { email: 'john@operations-hub.test', passwordHash },
     });
+    const company = await prisma.company.findFirst({
+      where: { name: 'Development', status: 'ACTIVE' },
+      orderBy: { id: 'asc' },
+    });
+    if (!company) {
+      throw new Error('Development company is missing. Apply migrations before e2e tests.');
+    }
+    const defaults = [
+      { id: 1, departmentId: 1, name: 'General' },
+      { id: 2, departmentId: 2, name: 'General' },
+      { id: 3, departmentId: 3, name: 'General' },
+    ];
+    for (const row of defaults) {
+      await prisma.requestType.upsert({
+        where: { id: row.id },
+        update: {
+          name: row.name,
+          approvalPolicy: 'NONE',
+          departmentId: row.departmentId,
+          companyId: company.id,
+        },
+        create: {
+          id: row.id,
+          name: row.name,
+          approvalPolicy: 'NONE',
+          departmentId: row.departmentId,
+          companyId: company.id,
+        },
+      });
+    }
+    await prisma.$executeRawUnsafe(
+      `SELECT setval(pg_get_serial_sequence('"RequestType"', 'id'), COALESCE((SELECT MAX(id) FROM "RequestType"), 1))`,
+    );
   } finally {
     await prisma.$disconnect();
   }

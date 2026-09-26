@@ -43,11 +43,30 @@ async function main() {
     create: { id: 2, name: 'John', companyId, departmentId: 1, canHandle: false },
   });
 
+  await prisma.requestType.upsert({
+    where: { id: 1 },
+    update: { name: 'General', approvalPolicy: 'NONE', departmentId: 1, companyId },
+    create: { id: 1, name: 'General', approvalPolicy: 'NONE', departmentId: 1, companyId },
+  });
+  await prisma.requestType.upsert({
+    where: { id: 2 },
+    update: { name: 'General', approvalPolicy: 'NONE', departmentId: 2, companyId },
+    create: { id: 2, name: 'General', approvalPolicy: 'NONE', departmentId: 2, companyId },
+  });
+  await prisma.requestType.upsert({
+    where: { id: 3 },
+    update: { name: 'General', approvalPolicy: 'NONE', departmentId: 3, companyId },
+    create: { id: 3, name: 'General', approvalPolicy: 'NONE', departmentId: 3, companyId },
+  });
+
   await prisma.$executeRawUnsafe(
     `SELECT setval(pg_get_serial_sequence('"Department"', 'id'), COALESCE((SELECT MAX(id) FROM "Department"), 1))`,
   );
   await prisma.$executeRawUnsafe(
     `SELECT setval(pg_get_serial_sequence('"Employee"', 'id'), COALESCE((SELECT MAX(id) FROM "Employee"), 1))`,
+  );
+  await prisma.$executeRawUnsafe(
+    `SELECT setval(pg_get_serial_sequence('"RequestType"', 'id'), COALESCE((SELECT MAX(id) FROM "RequestType"), 1))`,
   );
 }
 
