@@ -1,9 +1,10 @@
 import { BadRequestException, INestApplication, ValidationPipe } from '@nestjs/common';
-import { AccountRole } from '@prisma/client';
+import { AccountRole, CompanyStatus } from '@prisma/client';
 import jwt = require('jsonwebtoken');
 import * as request from 'supertest';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthService } from './auth.service';
+import { EmailSender } from './email-sender';
 import { createFirstSuperAdmin } from './create-first-super-admin';
 import { assertDevelopmentCredentialTarget, assertTestDatabase } from './database-target';
 import { planDevCredentialUpdate } from './dev-credentials';
@@ -25,6 +26,7 @@ import {
   removeNonDevelopmentCompanies,
   IT,
   IT_TYPE,
+  HR,
   JOHN,
   JOHN_EMAIL,
   sessionCookieFrom,
@@ -55,6 +57,15 @@ function assertNoCredentialFields(body: unknown, secrets: string[]) {
   for (const secret of secrets) {
     expect(serialized).not.toContain(secret);
   }
+}
+
+function assertInviteHidesSecrets(body: unknown, secrets: string[]) {
+  assertNoCredentialFields(body, secrets);
+  const serialized = JSON.stringify(body);
+  expect(serialized).not.toMatch(/tokenHash|passwordHash|argon2/i);
+  expect(body).not.toHaveProperty('token');
+  expect(body).not.toHaveProperty('passwordHash');
+  expect(body).not.toHaveProperty('csrfToken');
 }
 
 describe('authentication', () => {
@@ -330,7 +341,12 @@ describe('authentication', () => {
     expect(created.status).toBe(201);
     expect(created.body.email).toBe('new.person@operations-hub.test');
     expect(created.body.active).toBe(false);
-    assertNoCredentialFields(created.body, []);
+    const createdToken = app
+      .get(EmailSender)
+      .list()
+      .find((message) => message.to === 'new.person@operations-hub.test' && message.purpose === 'invitation')?.token;
+    expect(createdToken).toEqual(expect.any(String));
+    assertInviteHidesSecrets(created.body, [createdToken as string]);
     expect(created.body).not.toHaveProperty('csrfToken');
     const afterProvision = await prisma.session.findUniqueOrThrow({ where: { id: session.id } });
     expect(afterProvision.lastActivityAt.getTime()).toBeGreaterThan(stale.getTime() + 60_000);
@@ -370,7 +386,7 @@ describe('authentication', () => {
     expect(employeeDenied.status).toBe(403);
 
     const deptLogin = await login(app, 'dept-admin@operations-hub.test', ADMIN_PASSWORD, TEST_ORIGIN);
-    const deptDenied = await request(app.getHttpServer())
+    const deptInvite = await request(app.getHttpServer())
       .post('/auth/invitations')
       .set({
         Cookie: sessionCookieFrom(deptLogin),
@@ -378,12 +394,30 @@ describe('authentication', () => {
       })
       .send({
         email: 'dept-made@operations-hub.test',
-        name: 'Should Not Exist',
+        name: 'Dept Employee',
         departmentId: IT,
         role: 'EMPLOYEE',
         canHandle: false,
       });
-    expect(deptDenied.status).toBe(403);
+    expect(deptInvite.status).toBe(201);
+    expect(deptInvite.body.email).toBe('dept-made@operations-hub.test');
+    expect(deptInvite.body.role).toBe('EMPLOYEE');
+    expect(deptInvite.body.departmentId).toBe(IT);
+    expect(deptInvite.body.canHandle).toBe(false);
+    expect(deptInvite.body.active).toBe(false);
+    const deptInviteToken = app
+      .get(EmailSender)
+      .list()
+      .find((message) => message.to === 'dept-made@operations-hub.test' && message.purpose === 'invitation')?.token;
+    expect(deptInviteToken).toEqual(expect.any(String));
+    assertInviteHidesSecrets(deptInvite.body, [deptInviteToken as string, ADMIN_PASSWORD]);
+    const deptInvited = await prisma.employee.findUniqueOrThrow({
+      where: { email: 'dept-made@operations-hub.test' },
+    });
+    expect(deptInvited.passwordHash).toBeNull();
+    expect(deptInvited.role).toBe(AccountRole.EMPLOYEE);
+    expect(deptInvited.departmentId).toBe(IT);
+    expect(deptInvited.canHandle).toBe(false);
 
     await prisma.employee.update({ where: { id: admin.id }, data: { role: AccountRole.EMPLOYEE } });
     const demoted = await request(app.getHttpServer()).post('/auth/invitations').set(adminHeaders).send({
@@ -487,6 +521,160 @@ describe('authentication', () => {
       .get(`/requests/${requestRow.body.id}/history`)
       .set('Cookie', sessionCookieFrom(johnLogin));
     assertNoCredentialFields(history.body, []);
+  });
+
+  it('lets a Department Admin invite only ordinary employees into their own department', async () => {
+    const password = await hashPassword(ADMIN_PASSWORD);
+    const admin = await prisma.employee.create({
+      data: {
+        name: 'Invite Admin',
+        email: 'invite-da@operations-hub.test',
+        companyId,
+        departmentId: IT,
+        passwordHash: password,
+        role: AccountRole.DEPARTMENT_ADMIN,
+        canHandle: false,
+        active: true,
+      },
+    });
+    const unassigned = await prisma.employee.create({
+      data: {
+        name: 'Unassigned Admin',
+        email: 'invite-unassigned@operations-hub.test',
+        companyId,
+        departmentId: null,
+        passwordHash: password,
+        role: AccountRole.DEPARTMENT_ADMIN,
+        canHandle: false,
+        active: true,
+      },
+    });
+    const foreignCompany = await prisma.company.create({
+      data: { name: `Foreign Invite ${Date.now()}`, status: CompanyStatus.ACTIVE },
+    });
+    const foreignDepartment = await prisma.department.create({
+      data: { name: 'Outside', companyId: foreignCompany.id },
+    });
+    const loginAs = async (email: string) => {
+      const response = await login(app, email, ADMIN_PASSWORD, TEST_ORIGIN);
+      expect(response.status).toBe(200);
+      return {
+        Cookie: sessionCookieFrom(response),
+        'X-CSRF-Token': response.body.csrfToken as string,
+      };
+    };
+    const headers = await loginAs('invite-da@operations-hub.test');
+    const invite = (body: Record<string, unknown>, auth = headers) =>
+      request(app.getHttpServer()).post('/auth/invitations').set(auth).send(body);
+
+    const employee = await invite({
+      email: 'own-employee@operations-hub.test',
+      name: 'Own Employee',
+      departmentId: IT,
+      role: 'EMPLOYEE',
+      canHandle: false,
+    });
+    expect(employee.status).toBe(201);
+    expect(employee.body).toMatchObject({
+      email: 'own-employee@operations-hub.test',
+      role: 'EMPLOYEE',
+      departmentId: IT,
+      canHandle: false,
+      active: false,
+    });
+    const handler = await invite({
+      email: 'own-handler@operations-hub.test',
+      name: 'Own Handler',
+      departmentId: IT,
+      role: 'EMPLOYEE',
+      canHandle: true,
+    });
+    expect(handler.status).toBe(201);
+    expect(handler.body).toMatchObject({
+      email: 'own-handler@operations-hub.test',
+      role: 'EMPLOYEE',
+      departmentId: IT,
+      canHandle: true,
+      active: false,
+    });
+    for (const response of [employee, handler]) {
+      const token = app
+        .get(EmailSender)
+        .list()
+        .find((message) => message.to === response.body.email && message.purpose === 'invitation')?.token;
+      expect(token).toEqual(expect.any(String));
+      assertInviteHidesSecrets(response.body, [token as string, ADMIN_PASSWORD]);
+      const stored = await prisma.employee.findUniqueOrThrow({ where: { email: response.body.email as string } });
+      expect(stored.passwordHash).toBeNull();
+      expect(stored.companyId).toBe(companyId);
+      expect(stored.departmentId).toBe(IT);
+    }
+
+    expect(
+      (
+        await invite({
+          email: 'own-admin@operations-hub.test',
+          name: 'Own Admin',
+          departmentId: IT,
+          role: 'DEPARTMENT_ADMIN',
+          canHandle: false,
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await invite({
+          email: 'own-super@operations-hub.test',
+          name: 'Own Super',
+          departmentId: IT,
+          role: 'SUPER_ADMIN',
+          canHandle: false,
+        })
+      ).status,
+    ).toBe(403);
+    const otherDepartment = await invite({
+      email: 'other-desk@operations-hub.test',
+      name: 'Other Desk',
+      departmentId: HR,
+      role: 'EMPLOYEE',
+      canHandle: false,
+    });
+    expect(otherDepartment.status).toBe(403);
+    expect(otherDepartment.body.message).toBe('You can only invite staff into your own department');
+    const outside = await invite({
+      email: 'outside-co@operations-hub.test',
+      name: 'Outside Co',
+      departmentId: foreignDepartment.id,
+      role: 'EMPLOYEE',
+      canHandle: false,
+    });
+    expect(outside.status).toBe(400);
+    expect(outside.body.message).toBe(`Department ${foreignDepartment.id} was not found`);
+    expect(JSON.stringify(outside.body)).not.toContain(foreignCompany.name);
+
+    const unassignedHeaders = await loginAs('invite-unassigned@operations-hub.test');
+    const unassignedInvite = await invite(
+      {
+        email: 'unassigned-made@operations-hub.test',
+        name: 'Unassigned Made',
+        departmentId: IT,
+        role: 'EMPLOYEE',
+        canHandle: false,
+      },
+      unassignedHeaders,
+    );
+    expect(unassignedInvite.status).toBe(403);
+    expect(unassignedInvite.body.message).toBe('You are not assigned to a department');
+
+    expect(await prisma.employee.count({ where: { email: { in: [
+      'own-admin@operations-hub.test',
+      'own-super@operations-hub.test',
+      'other-desk@operations-hub.test',
+      'outside-co@operations-hub.test',
+      'unassigned-made@operations-hub.test',
+    ] } } })).toBe(0);
+    expect(admin.departmentId).toBe(IT);
+    expect(unassigned.departmentId).toBeNull();
   });
 
   it('rejects the existing cookie after the account is deactivated', async () => {
@@ -799,6 +987,7 @@ async function removeExtraAccounts(prisma: PrismaService) {
   });
   const ids = extras.map((employee) => employee.id);
   if (ids.length > 0) {
+    await prisma.passwordReset.deleteMany({ where: { accountId: { in: ids } } });
     await prisma.emailVerification.deleteMany({ where: { accountId: { in: ids } } });
     await prisma.invitation.deleteMany({
       where: { OR: [{ accountId: { in: ids } }, { invitedById: { in: ids } }] },

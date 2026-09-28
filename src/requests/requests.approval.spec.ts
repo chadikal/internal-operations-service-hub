@@ -2,6 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import { AccountRole, ApprovalState, RequestStatus } from '@prisma/client';
 import * as request from 'supertest';
 import { hashPassword } from '../auth/password';
+import { buildStatusTimeline, statusTimelineChain } from './status-timeline';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   authHeaders,
@@ -151,6 +152,13 @@ describe('Approval decisions', () => {
       'Badge access',
     );
 
+    const counted = await request(app.getHttpServer())
+      .get('/requests/approvals')
+      .query({ status: 'awaiting' })
+      .set(await loginById(superAdminId));
+    expect(counted.status).toBe(200);
+    expect(counted.body.items.find((item: { id: number }) => item.id === created.body.id)).toBeUndefined();
+
     const hrInbox = await request(app.getHttpServer()).get('/requests/approvals').set(await loginById(hrAdminId));
     expect(hrInbox.status).toBe(200);
     expect(hrInbox.body.items).toEqual([]);
@@ -229,6 +237,10 @@ describe('Approval decisions', () => {
     expect(approved.body.approvalState).toBe('APPROVED');
     expect(approved.body.status).toBe('SUBMITTED');
     expect(approved.body.approvalDecision.approverRole).toBe('DEPARTMENT_ADMIN');
+    expect(statusTimelineChain(approved.body, [])).toBe(
+      'Submitted → Awaiting Approval → Approved → Unclaimed',
+    );
+    expect(await prisma.requestStatusHistory.count({ where: { requestId: created.body.id } })).toBe(0);
 
     const assigned = await request(app.getHttpServer())
       .post(`/requests/${created.body.id}/claim`)
@@ -236,6 +248,14 @@ describe('Approval decisions', () => {
     expect(assigned.status).toBe(201);
     expect(assigned.body.status).toBe('SUBMITTED');
     expect(assigned.body.approvalState).toBe('APPROVED');
+    expect(statusTimelineChain(assigned.body, [])).toBe(
+      'Submitted → Awaiting Approval → Approved → Unclaimed → Claimed',
+    );
+    expect(assigned.body.claimedAt).toEqual(expect.any(String));
+    const claimedStep = buildStatusTimeline(assigned.body, []).find((step) => step.label === 'Claimed');
+    expect(claimedStep?.detail).toBe(
+      `by ${assigned.body.currentOwner.name} · ${new Date(assigned.body.claimedAt).toLocaleString()}`,
+    );
   });
 
   it('rejects self-approval and stays pending when no other department admin can decide', async () => {
@@ -265,6 +285,18 @@ describe('Approval decisions', () => {
       expect(created.body.approvalState).toBe('PENDING');
       expect(created.body.noEligibleApprover).toBe(true);
       expect(created.body.approvalNotice).toMatch(/No other Department Admin/);
+
+      const mine = await request(app.getHttpServer())
+        .get('/requests')
+        .query({ queue: 'submitted' })
+        .set(await loginById(solo.id));
+      expect(mine.status).toBe(200);
+      expect(mine.body.items.map((item: { id: number }) => item.id)).toContain(created.body.id);
+      const inbox = await request(app.getHttpServer())
+        .get('/requests/approvals')
+        .set(await loginById(solo.id));
+      expect(inbox.status).toBe(200);
+      expect(inbox.body.items.map((item: { id: number }) => item.id)).not.toContain(created.body.id);
 
       const selfDecision = await request(app.getHttpServer())
         .post(`/requests/${created.body.id}/approval`)

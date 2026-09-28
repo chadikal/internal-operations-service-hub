@@ -9,14 +9,11 @@ import {
   SessionUser,
 } from './api';
 import { ApprovalFacts } from './approvals';
+import { canActAsHandler } from './roles';
+import { requestStageLabel, stageClass } from './request-stage';
+import { StatusHistory } from './status-history';
 
 export type IntakeStep = 'input' | 'troubleshoot' | 'offer' | 'draft' | 'resolved' | 'declined';
-
-function statusClass(status: ServiceRequest['status']) {
-  if (status === 'SUBMITTED') return 'badge badge-submitted';
-  if (status === 'IN_PROGRESS') return 'badge badge-progress';
-  return 'badge badge-completed';
-}
 
 function approvalAllowsClaim(request: ServiceRequest) {
   if (request.approvalState === 'NOT_REQUIRED' || request.approvalState === 'APPROVED') {
@@ -36,12 +33,6 @@ function approvalBlocksClaim(request: ServiceRequest) {
       (request.capturedApprovalPolicy === 'DEPARTMENT_ADMIN' ||
         request.capturedApprovalPolicy === 'SUPER_ADMIN'))
   );
-}
-
-function formatWhen(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString();
 }
 
 function hasMissingRequiredInformation(result: IntakeResult | null): boolean {
@@ -149,8 +140,6 @@ export function RequestWorkspace({
   setTitle,
   description,
   setDescription,
-  loadId,
-  setLoadId,
   request,
   history,
   busy,
@@ -160,15 +149,14 @@ export function RequestWorkspace({
   intakeStep,
   canSubmitRequest,
   onCreate,
-  onLoad,
   onClaim,
   onTransition,
   onAnalyze,
   onProblemSolved,
   onPrepareRequest,
   resetIntake,
-  showLoadForm = true,
   showDetails = true,
+  focus = 'both',
 }: {
   user: SessionUser;
   departments: Department[];
@@ -181,8 +169,6 @@ export function RequestWorkspace({
   setTitle: (value: string) => void;
   description: string;
   setDescription: (value: string) => void;
-  loadId: string;
-  setLoadId: (value: string) => void;
   request: ServiceRequest | null;
   history: HistoryRecord[];
   busy: boolean;
@@ -192,17 +178,16 @@ export function RequestWorkspace({
   intakeStep: IntakeStep;
   canSubmitRequest: boolean;
   onCreate: (event: FormEvent) => void;
-  onLoad: (event: FormEvent) => void;
   onClaim: () => void;
   onTransition: (to: 'IN_PROGRESS' | 'COMPLETED') => void;
   onAnalyze: (event: FormEvent) => void;
   onProblemSolved: (solved: boolean) => void;
   onPrepareRequest: (prepare: boolean) => void;
   resetIntake: () => void;
-  showLoadForm?: boolean;
   showDetails?: boolean;
+  focus?: 'create' | 'intake' | 'both';
 }) {
-  const canHandle = user.canHandle === true && user.role !== 'SUPER_ADMIN';
+  const canHandle = canActAsHandler(user.role, user.canHandle);
   const approvalBlocksHandling = request != null && approvalBlocksClaim(request);
   const isCurrentOwner = request != null && Number(request.currentOwnerId) === Number(user.id);
   const canClaim =
@@ -217,7 +202,8 @@ export function RequestWorkspace({
 
   return (
     <>
-      <section className="card">
+      {focus !== 'create' ? (
+      <section className="card" data-testid="intake-card">
         <h2>Request Intake</h2>
         <p className="muted">
           Describe what you need. Suggestions are advisory only; nothing is submitted until you
@@ -375,7 +361,9 @@ export function RequestWorkspace({
           </form>
         ) : null}
       </section>
+      ) : null}
 
+      {focus !== 'intake' ? (
       <div className="grid">
         <section className="card">
           <h2>Create Request</h2>
@@ -413,35 +401,16 @@ export function RequestWorkspace({
             </button>
           </form>
         </section>
-
-        {showLoadForm ? (
-        <section className="card">
-          <h2>Load Request</h2>
-          <p className="muted">Open an existing request by its ID.</p>
-          <form className="stack" onSubmit={onLoad}>
-            <label>
-              Request ID
-              <input
-                value={loadId}
-                onChange={(event) => setLoadId(event.target.value)}
-                inputMode="numeric"
-              />
-            </label>
-            <button className="btn-secondary" type="submit" disabled={busy}>
-              Load Request
-            </button>
-          </form>
-        </section>
-        ) : null}
       </div>
+      ) : null}
 
       {showDetails && request ? (
         <>
           <section className="card">
             <div className="card-heading">
               <h2>Request Details</h2>
-              <span className={statusClass(request.status)} data-testid="request-status">
-                {request.status.replace('_', ' ')}
+              <span className={stageClass(requestStageLabel(request))} data-testid="request-stage">
+                {requestStageLabel(request)}
               </span>
             </div>
             <dl className="details">
@@ -467,12 +436,8 @@ export function RequestWorkspace({
               </div>
               <ApprovalFacts request={request} />
               <div>
-                <dt>Owner</dt>
-                <dd>{request.currentOwner ? request.currentOwner.name : 'Unassigned'}</dd>
-              </div>
-              <div>
-                <dt>Status</dt>
-                <dd>{request.status.replace('_', ' ')}</dd>
+                <dt>Claimed by</dt>
+                <dd>{request.currentOwner ? request.currentOwner.name : 'Unclaimed'}</dd>
               </div>
               <div>
                 <dt>Title</dt>
@@ -487,7 +452,7 @@ export function RequestWorkspace({
             {canHandle && approvalBlocksHandling ? (
               <p className="muted">
                 {request.approvalState === 'DENIED'
-                  ? 'A denied request cannot be handled. Work status stays unchanged.'
+                  ? 'A denied request cannot be handled.'
                   : 'This request is waiting for approval and cannot be handled yet.'}
               </p>
             ) : null}
@@ -496,9 +461,7 @@ export function RequestWorkspace({
               <div className="actions">
                 {canClaim ? (
                   <>
-                    <p className="muted">
-                      Claim this request to become the owner. It stays Submitted until you start the work.
-                    </p>
+                    <p className="muted">Claim this request. It stays Submitted until you start the work.</p>
                     <button className="btn-primary" type="button" disabled={busy} onClick={onClaim}>
                       Claim
                     </button>
@@ -512,7 +475,7 @@ export function RequestWorkspace({
                       disabled={busy}
                       onClick={() => onTransition('IN_PROGRESS')}
                     >
-                      Start Request
+                      Start Work
                     </button>
                   ) : null}
 
@@ -523,7 +486,7 @@ export function RequestWorkspace({
                       disabled={busy}
                       onClick={() => onTransition('COMPLETED')}
                     >
-                      Complete Request
+                      Complete
                     </button>
                   ) : null}
                 </div>
@@ -532,22 +495,7 @@ export function RequestWorkspace({
 
           <section className="card">
             <h2>Status History</h2>
-            {history.length === 0 ? (
-              <p className="muted">No successful status changes yet.</p>
-            ) : (
-              <ol className="timeline" data-testid="status-history">
-                {history.map((record) => (
-                  <li key={record.id}>
-                    <strong>
-                      {record.previousStatus.replace('_', ' ')} → {record.newStatus.replace('_', ' ')}
-                    </strong>
-                    <span>
-                      by {record.changedByEmployee.name} · {formatWhen(record.changedAt)}
-                    </span>
-                  </li>
-                ))}
-              </ol>
-            )}
+            <StatusHistory request={request} history={history} />
           </section>
         </>
       ) : null}

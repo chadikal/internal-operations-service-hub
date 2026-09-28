@@ -1,16 +1,9 @@
 import { ApprovalPolicy } from '@prisma/client';
+import { DEPARTMENT_TEMPLATE_CATALOG, TemplatePolicy } from './department-template-catalog';
 
-export const DEPARTMENT_TEMPLATE_IDS = [
-  'IT',
-  'HR',
-  'FINANCE',
-  'OPERATIONS',
-  'MARKETING',
-  'FACILITIES',
-  'CUSTOM_EMPTY',
-] as const;
+export const DEPARTMENT_TEMPLATE_IDS = DEPARTMENT_TEMPLATE_CATALOG.map((item) => item.id);
 
-export type DepartmentTemplateId = (typeof DEPARTMENT_TEMPLATE_IDS)[number];
+export type DepartmentTemplateId = (typeof DEPARTMENT_TEMPLATE_CATALOG)[number]['id'];
 
 export type TemplateSuggestion = {
   name: string;
@@ -24,79 +17,32 @@ export type DepartmentTemplate = {
   suggestionsRecorded: boolean;
 };
 
-function suggestion(name: string, approvalPolicy: ApprovalPolicy): TemplateSuggestion {
-  return { name, approvalPolicy };
+function policy(value: TemplatePolicy): ApprovalPolicy {
+  if (value === 'DEPARTMENT_ADMIN') return ApprovalPolicy.DEPARTMENT_ADMIN;
+  if (value === 'SUPER_ADMIN') return ApprovalPolicy.SUPER_ADMIN;
+  return ApprovalPolicy.NONE;
 }
 
 /**
  * Recommended catalog recorded in docs/product-spec.md. These are suggestions
- * for Super Admin review, not company policy, and are not applied at signup.
+ * for review, not company policy, until a Super Admin or founder confirms them.
  * Changing a suggestion does not rename types already stored for a company
  * or rewrite captured approval policies on submitted requests.
  */
-export const DEPARTMENT_TEMPLATES: Record<DepartmentTemplateId, DepartmentTemplate> = {
-  IT: {
-    id: 'IT',
-    name: 'IT',
-    suggestions: [
-      suggestion('Hardware', ApprovalPolicy.NONE),
-      suggestion('Software', ApprovalPolicy.NONE),
-      suggestion('Access', ApprovalPolicy.DEPARTMENT_ADMIN),
-    ],
-    suggestionsRecorded: true,
-  },
-  HR: {
-    id: 'HR',
-    name: 'HR',
-    suggestions: [
-      suggestion('Leave', ApprovalPolicy.DEPARTMENT_ADMIN),
-      suggestion('Certificate', ApprovalPolicy.NONE),
-    ],
-    suggestionsRecorded: true,
-  },
-  FINANCE: {
-    id: 'FINANCE',
-    name: 'Finance',
-    suggestions: [
-      suggestion('Expense', ApprovalPolicy.DEPARTMENT_ADMIN),
-      suggestion('Purchase exception', ApprovalPolicy.SUPER_ADMIN),
-    ],
-    suggestionsRecorded: true,
-  },
-  OPERATIONS: {
-    id: 'OPERATIONS',
-    name: 'Operations',
-    suggestions: [
-      suggestion('Process change', ApprovalPolicy.DEPARTMENT_ADMIN),
-      suggestion('Operational support', ApprovalPolicy.NONE),
-    ],
-    suggestionsRecorded: true,
-  },
-  MARKETING: {
-    id: 'MARKETING',
-    name: 'Marketing',
-    suggestions: [
-      suggestion('Campaign', ApprovalPolicy.DEPARTMENT_ADMIN),
-      suggestion('Brand asset', ApprovalPolicy.NONE),
-    ],
-    suggestionsRecorded: true,
-  },
-  FACILITIES: {
-    id: 'FACILITIES',
-    name: 'Facilities',
-    suggestions: [
-      suggestion('Maintenance / Repair', ApprovalPolicy.NONE),
-      suggestion('Access badge', ApprovalPolicy.DEPARTMENT_ADMIN),
-    ],
-    suggestionsRecorded: true,
-  },
-  CUSTOM_EMPTY: {
-    id: 'CUSTOM_EMPTY',
-    name: 'Custom/Empty',
-    suggestions: [],
-    suggestionsRecorded: true,
-  },
-};
+export const DEPARTMENT_TEMPLATES: Record<DepartmentTemplateId, DepartmentTemplate> = Object.fromEntries(
+  DEPARTMENT_TEMPLATE_CATALOG.map((item) => [
+    item.id,
+    {
+      id: item.id,
+      name: item.name,
+      suggestions: item.suggestions.map((entry) => ({
+        name: entry.name,
+        approvalPolicy: policy(entry.approvalPolicy),
+      })),
+      suggestionsRecorded: true,
+    },
+  ]),
+) as Record<DepartmentTemplateId, DepartmentTemplate>;
 
 export function isDepartmentTemplateId(value: string): value is DepartmentTemplateId {
   return (DEPARTMENT_TEMPLATE_IDS as readonly string[]).includes(value);

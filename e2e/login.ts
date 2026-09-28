@@ -6,7 +6,13 @@ export async function login(page: Page, email: string) {
   await expect(page.getByRole('heading', { name: 'Log in' })).toBeVisible();
   await expect(page.getByRole('group', { name: 'Acting as' })).toHaveCount(0);
   await page.getByLabel('Email').fill(email);
-  await page.getByLabel('Password').fill(TEST_PASSWORD);
+  await page.getByLabel('Password', { exact: true }).fill(TEST_PASSWORD);
   await page.getByRole('button', { name: 'Log in' }).click();
   await expect(page.getByTestId('signed-in-name')).toBeVisible();
+}
+
+export async function completeWorkspaceSetup(page: Page) {
+  await page.getByRole('button', { name: 'Next', exact: true }).click();
+  await page.getByRole('button', { name: 'Next', exact: true }).click();
+  await page.getByRole('button', { name: 'Create workspace' }).click();
 }

@@ -29,7 +29,7 @@ export function optionalQueryInt(key: string) {
   };
 }
 
-function optionalQueryBoolean(key: string) {
+export function optionalQueryBoolean(key: string) {
   return ({ obj }: { obj: unknown }) => {
     if (typeof obj !== 'object' || obj === null || !Object.prototype.hasOwnProperty.call(obj, key)) {
       return undefined;
@@ -63,8 +63,8 @@ export class ListEmployeesQueryDto {
 
   @Transform(optionalQueryString('role'))
   @IsOptional()
-  @IsIn(['EMPLOYEE', 'DEPARTMENT_ADMIN', 'SUPER_ADMIN'])
-  role?: 'EMPLOYEE' | 'DEPARTMENT_ADMIN' | 'SUPER_ADMIN';
+  @IsIn(['EMPLOYEE', 'DEPARTMENT_ADMIN', 'SUPER_ADMIN', 'ADMIN'])
+  role?: 'EMPLOYEE' | 'DEPARTMENT_ADMIN' | 'SUPER_ADMIN' | 'ADMIN';
 
   @Transform(optionalQueryBoolean('canHandle'))
   @IsOptional()

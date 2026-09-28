@@ -53,7 +53,13 @@ const recordingProvider: AiProvider = {
 
 function signup(
   app: INestApplication,
-  body: { companyName: string; name: string; email: string; password: string },
+  body: {
+    companyName: string;
+    name: string;
+    email: string;
+    password: string;
+    departments?: { name: string; requestTypes: { name: string; approvalPolicy: string }[] }[];
+  },
   origin: string | undefined = TEST_ORIGIN,
 ) {
   const call = request(app.getHttpServer()).post('/auth/signup');
@@ -81,6 +87,7 @@ async function cleanup(prisma: PrismaService) {
   });
   const ids = extras.map((employee) => employee.id);
   if (ids.length > 0) {
+    await prisma.passwordReset.deleteMany({ where: { accountId: { in: ids } } });
     await prisma.emailVerification.deleteMany({ where: { accountId: { in: ids } } });
     await prisma.invitation.deleteMany({
       where: { OR: [{ accountId: { in: ids } }, { invitedById: { in: ids } }] },
@@ -524,6 +531,185 @@ describe('company signup', () => {
     ).toEqual([...DEFAULT_COMPANY_DEPARTMENTS].sort());
   });
 
+  it('persists only the departments and request types the founder confirmed', async () => {
+    const created = await signup(app, {
+      companyName: 'Chosen Desk',
+      name: 'Founder Chosen',
+      email: 'chosen.founder@operations-hub.test',
+      password: PASSWORD,
+      departments: [
+        {
+          name: 'IT',
+          requestTypes: [
+            { name: 'Hardware', approvalPolicy: 'NONE' },
+            { name: 'Access', approvalPolicy: 'DEPARTMENT_ADMIN' },
+          ],
+        },
+        { name: 'People', requestTypes: [{ name: 'Badge', approvalPolicy: 'SUPER_ADMIN' }] },
+      ],
+    });
+    expect(created.status).toBe(201);
+    const again = await signup(app, {
+      companyName: 'Chosen Desk',
+      name: 'Founder Chosen',
+      email: 'chosen.founder@operations-hub.test',
+      password: PASSWORD,
+      departments: [{ name: 'IT', requestTypes: [] }],
+    });
+    expect(again.status).toBe(409);
+    const token = await outboxToken(app, 'chosen.founder@operations-hub.test', 'email-verification');
+    expect(
+      (await request(app.getHttpServer()).post('/auth/verify-email').set('Origin', TEST_ORIGIN).send({ token })).status,
+    ).toBe(200);
+    const headers = await loginHeaders(app, 'chosen.founder@operations-hub.test', PASSWORD);
+    const listed = await request(app.getHttpServer()).get('/departments').set(headers);
+    expect(listed.body.map((department: { name: string }) => department.name).sort()).toEqual(['IT', 'People']);
+    const it = listed.body.find((department: { id: number; name: string }) => department.name === 'IT');
+    const types = await request(app.getHttpServer()).get('/request-types').set(headers);
+    expect(types.status).toBe(200);
+    expect(
+      types.body
+        .filter((item: { departmentId: number }) => item.departmentId === it.id)
+        .map((item: { name: string; approvalPolicy: string }) => ({
+          name: item.name,
+          approvalPolicy: item.approvalPolicy,
+        })),
+    ).toEqual([
+      { name: 'Hardware', approvalPolicy: 'NONE' },
+      { name: 'Access', approvalPolicy: 'DEPARTMENT_ADMIN' },
+    ]);
+    expect(await prisma.company.count({ where: { name: 'Chosen Desk' } })).toBe(1);
+  });
+
+  it('lets a Department Admin rename only their own department', async () => {
+    const stamp = Date.now();
+    const founderEmail = `dept.admin.founder.${stamp}@operations-hub.test`;
+    const adminEmail = `dept.admin.${stamp}@operations-hub.test`;
+    const otherEmail = `dept.other.founder.${stamp}@operations-hub.test`;
+    const created = await signup(app, {
+      companyName: `Dept Scope ${stamp}`,
+      name: 'Dept Founder',
+      email: founderEmail,
+      password: PASSWORD,
+    });
+    expect(created.status).toBe(201);
+    const other = await signup(app, {
+      companyName: `Dept Other ${stamp}`,
+      name: 'Other Founder',
+      email: otherEmail,
+      password: PASSWORD,
+    });
+    expect(other.status).toBe(201);
+    for (const email of [founderEmail, otherEmail]) {
+      const token = await outboxToken(app, email, 'email-verification');
+      expect(
+        (
+          await request(app.getHttpServer())
+            .post('/auth/verify-email')
+            .set('Origin', TEST_ORIGIN)
+            .send({ token })
+        ).status,
+      ).toBe(200);
+    }
+    const headers = await loginHeaders(app, founderEmail, PASSWORD);
+    const otherHeaders = await loginHeaders(app, otherEmail, PASSWORD);
+    const listed = await request(app.getHttpServer()).get('/departments').set(headers);
+    const otherListed = await request(app.getHttpServer()).get('/departments').set(otherHeaders);
+    const it = listed.body.find((department: { name: string }) => department.name === 'IT');
+    const hr = listed.body.find((department: { name: string }) => department.name === 'HR');
+    const foreign = otherListed.body.find((department: { name: string }) => department.name === 'IT');
+    const invited = await request(app.getHttpServer()).post('/auth/invitations').set(headers).send({
+      email: adminEmail,
+      name: 'Dana IT',
+      departmentId: it.id,
+      role: 'DEPARTMENT_ADMIN',
+      canHandle: false,
+    });
+    expect(invited.status).toBe(201);
+    const inviteToken = await outboxToken(app, adminEmail, 'invitation');
+    expect(
+      (
+        await request(app.getHttpServer())
+          .post('/auth/invitations/accept')
+          .set('Origin', TEST_ORIGIN)
+          .send({ token: inviteToken, password: PASSWORD })
+      ).status,
+    ).toBe(200);
+    const adminHeaders = await loginHeaders(app, adminEmail, PASSWORD);
+    const createdType = await request(app.getHttpServer())
+      .post(`/departments/${it.id}/request-types`)
+      .set(headers)
+      .send({ name: 'Badge', approvalPolicy: 'NONE' });
+    expect(createdType.status).toBe(201);
+
+    const renamed = await request(app.getHttpServer())
+      .patch(`/departments/${it.id}`)
+      .set(adminHeaders)
+      .send({ name: '  Service Desk  ' });
+    expect(renamed.status).toBe(200);
+    expect(renamed.body).toEqual({ id: it.id, name: 'Service Desk' });
+
+    const otherDepartment = await request(app.getHttpServer())
+      .patch(`/departments/${hr.id}`)
+      .set(adminHeaders)
+      .send({ name: 'People' });
+    expect(otherDepartment.status).toBe(403);
+    expect(otherDepartment.body.message).toBe('You can only edit your own department');
+    expect((await prisma.department.findUnique({ where: { id: hr.id } }))?.name).toBe('HR');
+
+    const foreignPatch = await request(app.getHttpServer())
+      .patch(`/departments/${foreign.id}`)
+      .set(adminHeaders)
+      .send({ name: 'Stolen' });
+    expect(foreignPatch.status).toBe(404);
+    expect((await prisma.department.findUnique({ where: { id: foreign.id } }))?.name).toBe('IT');
+
+    const missing = await request(app.getHttpServer())
+      .patch('/departments/999999999')
+      .set(adminHeaders)
+      .send({ name: 'Missing' });
+    expect(missing.status).toBe(404);
+
+    expect(
+      (await request(app.getHttpServer()).post('/departments').set(adminHeaders).send({ name: 'Legal' })).status,
+    ).toBe(403);
+    expect((await request(app.getHttpServer()).delete(`/departments/${it.id}`).set(adminHeaders)).status).toBe(403);
+    expect(await prisma.department.findUnique({ where: { id: it.id } })).toMatchObject({ name: 'Service Desk' });
+    expect(
+      (
+        await request(app.getHttpServer())
+          .post(`/departments/${it.id}/request-types`)
+          .set(adminHeaders)
+          .send({ name: 'Laptop', approvalPolicy: 'NONE' })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await request(app.getHttpServer())
+          .patch(`/request-types/${createdType.body.id}`)
+          .set(adminHeaders)
+          .send({ name: 'Changed', approvalPolicy: 'SUPER_ADMIN' })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await request(app.getHttpServer())
+          .post(`/departments/${it.id}/template-types`)
+          .set(adminHeaders)
+          .send({ templateId: 'IT', requestTypes: [{ name: 'Access', approvalPolicy: 'NONE' }] })
+      ).status,
+    ).toBe(403);
+    const storedType = await prisma.requestType.findUnique({ where: { id: createdType.body.id } });
+    expect(storedType).toMatchObject({ name: 'Badge', approvalPolicy: 'NONE' });
+
+    const founderRename = await request(app.getHttpServer())
+      .patch(`/departments/${hr.id}`)
+      .set(headers)
+      .send({ name: 'People Ops' });
+    expect(founderRename.status).toBe(200);
+    expect(founderRename.body).toEqual({ id: hr.id, name: 'People Ops' });
+  });
+
   it('denies cross-company request, history, lookup, and intake access', async () => {
     await signup(app, {
       companyName: 'Company A',
@@ -683,6 +869,10 @@ describe('company signup', () => {
     const previous = process.env.NODE_ENV;
     const sender = app.get(EmailSender);
     const queuedBefore = sender.list().length;
+    const printed: string[] = [];
+    const logs = jest.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      printed.push(args.map(String).join(' '));
+    });
     process.env.NODE_ENV = 'production';
     try {
       const created = await signup(app, {
@@ -704,6 +894,7 @@ describe('company signup', () => {
         }),
       ).toBeNull();
       expect(sender.list()).toHaveLength(queuedBefore);
+      expect(printed.join('\n')).not.toContain('verify=');
     } finally {
       process.env.NODE_ENV = previous;
     }
@@ -741,7 +932,74 @@ describe('company signup', () => {
       expect(invited.body.message).toBe(EMAIL_NOT_CONFIGURED);
       expect(await prisma.employee.findUnique({ where: { email: 'prod.invitee@operations-hub.test' } })).toBeNull();
       expect(await prisma.invitation.count({ where: { company: { name: 'Invite Later' } } })).toBe(0);
+      expect(printed.join('\n')).not.toContain('invite=');
+      expect(printed.join('\n')).not.toContain('Development mail outbox');
     } finally {
+      logs.mockRestore();
+      process.env.NODE_ENV = previous;
+    }
+  });
+
+  it('refuses signup and invitations on a non-development database without logging tokens', async () => {
+    const previous = process.env.NODE_ENV;
+    const printed: string[] = [];
+    const logs = jest.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      printed.push(args.map(String).join(' '));
+    });
+    process.env.NODE_ENV = 'development';
+    try {
+      const created = await signup(app, {
+        companyName: 'Other Database',
+        name: 'Other Founder',
+        email: 'other.founder@operations-hub.test',
+        password: PASSWORD,
+      });
+      expect(created.status).toBe(503);
+      expect(created.body.message).toBe(EMAIL_NOT_CONFIGURED);
+      expect(await prisma.company.findFirst({ where: { name: 'Other Database' } })).toBeNull();
+      expect(await prisma.employee.findUnique({ where: { email: 'other.founder@operations-hub.test' } })).toBeNull();
+      expect(printed.join('\n')).not.toContain('verify=');
+    } finally {
+      process.env.NODE_ENV = previous;
+    }
+
+    const prepared = await signup(app, {
+      companyName: 'Other Invite',
+      name: 'Other Invite Founder',
+      email: 'other.invite.founder@operations-hub.test',
+      password: PASSWORD,
+    });
+    expect(prepared.status).toBe(201);
+    const verifyToken = await outboxToken(app, 'other.invite.founder@operations-hub.test', 'email-verification');
+    expect(
+      (
+        await request(app.getHttpServer())
+          .post('/auth/verify-email')
+          .set('Origin', TEST_ORIGIN)
+          .send({ token: verifyToken })
+      ).status,
+    ).toBe(200);
+    const headers = await loginHeaders(app, 'other.invite.founder@operations-hub.test', PASSWORD);
+    const department = await request(app.getHttpServer()).post('/departments').set(headers).send({ name: 'Desk' });
+    expect(department.status).toBe(201);
+
+    process.env.NODE_ENV = 'development';
+    try {
+      const invited = await request(app.getHttpServer()).post('/auth/invitations').set(headers).send({
+        email: 'other.invitee@operations-hub.test',
+        name: 'Other Invitee',
+        departmentId: department.body.id,
+        role: 'EMPLOYEE',
+        canHandle: false,
+      });
+      expect(invited.status).toBe(503);
+      expect(invited.body.message).toBe(EMAIL_NOT_CONFIGURED);
+      expect(await prisma.employee.findUnique({ where: { email: 'other.invitee@operations-hub.test' } })).toBeNull();
+      expect(await prisma.invitation.count({ where: { company: { name: 'Other Invite' } } })).toBe(0);
+      expect(printed.join('\n')).not.toContain('invite=');
+      expect(printed.join('\n')).not.toContain('Development mail outbox');
+    } finally {
+      logs.mockRestore();
       process.env.NODE_ENV = previous;
     }
   });
@@ -794,6 +1052,108 @@ describe('company signup', () => {
     } finally {
       process.env.NODE_ENV = previous;
     }
+  });
+
+  it('stores Department Admin invites as handlers and keeps Super Admin unable to claim', async () => {
+    const stamp = Date.now();
+    const founderEmail = `handler.founder.${stamp}@operations-hub.test`;
+    const adminEmail = `handler.admin.${stamp}@operations-hub.test`;
+    const superEmail = `handler.super.${stamp}@operations-hub.test`;
+    const created = await signup(app, {
+      companyName: `Handler Co ${stamp}`,
+      name: 'Handler Founder',
+      email: founderEmail,
+      password: PASSWORD,
+    });
+    expect(created.status).toBe(201);
+    const verifyToken = await outboxToken(app, founderEmail, 'email-verification');
+    expect(
+      (
+        await request(app.getHttpServer())
+          .post('/auth/verify-email')
+          .set('Origin', TEST_ORIGIN)
+          .send({ token: verifyToken })
+      ).status,
+    ).toBe(200);
+    const headers = await loginHeaders(app, founderEmail, PASSWORD);
+    const founder = await prisma.employee.findUniqueOrThrow({ where: { email: founderEmail } });
+    expect(founder.role).toBe('SUPER_ADMIN');
+    expect(founder.canHandle).toBe(false);
+
+    const departments = await request(app.getHttpServer()).get('/departments').set(headers);
+    const it = departments.body.find((department: { name: string }) => department.name === 'IT');
+    const type = await request(app.getHttpServer())
+      .post(`/departments/${it.id}/request-types`)
+      .set(headers)
+      .send({ name: 'Desk', approvalPolicy: 'NONE' });
+    expect(type.status).toBe(201);
+
+    const adminInvite = await request(app.getHttpServer()).post('/auth/invitations').set(headers).send({
+      email: adminEmail,
+      name: 'Dana Admin',
+      departmentId: it.id,
+      role: 'DEPARTMENT_ADMIN',
+      canHandle: false,
+    });
+    expect(adminInvite.status).toBe(201);
+    expect(adminInvite.body.canHandle).toBe(true);
+    const storedAdmin = await prisma.employee.findUniqueOrThrow({ where: { email: adminEmail } });
+    expect(storedAdmin.role).toBe('DEPARTMENT_ADMIN');
+    expect(storedAdmin.canHandle).toBe(true);
+
+    const superInvite = await request(app.getHttpServer()).post('/auth/invitations').set(headers).send({
+      email: superEmail,
+      name: 'Extra Super',
+      departmentId: it.id,
+      role: 'SUPER_ADMIN',
+      canHandle: true,
+    });
+    expect(superInvite.status).toBe(201);
+    expect(superInvite.body.canHandle).toBe(false);
+    const storedSuper = await prisma.employee.findUniqueOrThrow({ where: { email: superEmail } });
+    expect(storedSuper.role).toBe('SUPER_ADMIN');
+    expect(storedSuper.canHandle).toBe(false);
+
+    const submitted = await request(app.getHttpServer()).post('/requests').set(headers).send({
+      submittedBy: founder.id,
+      departmentId: it.id,
+      requestTypeId: type.body.id,
+      title: 'Eligible desk work',
+    });
+    expect(submitted.status).toBe(201);
+
+    const founderClaim = await request(app.getHttpServer())
+      .post(`/requests/${submitted.body.id}/claim`)
+      .set(headers);
+    expect(founderClaim.status).toBe(403);
+    expect(founderClaim.body.message).toMatch(/not allowed to handle/i);
+
+    for (const email of [adminEmail, superEmail]) {
+      const token = await outboxToken(app, email, 'invitation');
+      expect(
+        (
+          await request(app.getHttpServer())
+            .post('/auth/invitations/accept')
+            .set('Origin', TEST_ORIGIN)
+            .send({ token, password: PASSWORD })
+        ).status,
+      ).toBe(200);
+    }
+    const superHeaders = await loginHeaders(app, superEmail, PASSWORD);
+    const superClaim = await request(app.getHttpServer())
+      .post(`/requests/${submitted.body.id}/claim`)
+      .set(superHeaders);
+    expect(superClaim.status).toBe(403);
+    expect(superClaim.body.message).toMatch(/not allowed to handle/i);
+    expect((await prisma.request.findUniqueOrThrow({ where: { id: submitted.body.id } })).currentOwnerId).toBeNull();
+
+    const adminHeaders = await loginHeaders(app, adminEmail, PASSWORD);
+    const claimed = await request(app.getHttpServer())
+      .post(`/requests/${submitted.body.id}/claim`)
+      .set(adminHeaders);
+    expect(claimed.status).toBe(201);
+    expect(claimed.body.currentOwnerId).toBe(storedAdmin.id);
+    expect(claimed.body.status).toBe('SUBMITTED');
   });
 });
 

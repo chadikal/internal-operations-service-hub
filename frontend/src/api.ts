@@ -83,14 +83,18 @@ export type ServiceRequest = {
   approvalNotice: string | null;
   approvalDecision: ApprovalDecision | null;
   currentOwnerId: number | null;
+  claimedAt: string | null;
   status: 'SUBMITTED' | 'IN_PROGRESS' | 'COMPLETED';
   statusUpdatedAt: string;
+  submittedAt: string;
   title: string | null;
   description: string | null;
   submitter: NamedRef;
   department: NamedRef;
   requestType: NamedRef | null;
   currentOwner: NamedRef | null;
+  canOpen?: boolean;
+  canDecide?: boolean;
 };
 
 export type HistoryRecord = {
@@ -122,7 +126,7 @@ export class ApiError extends Error {
   status: number;
 
   constructor(status: number, message: string) {
-    super(`${status}: ${message}`);
+    super(message);
     this.status = status;
   }
 }
@@ -254,6 +258,10 @@ export function updateRequestType(
   });
 }
 
+export function deleteRequestType(id: number) {
+  return send<{ deleted: true }>(`/request-types/${id}`, { method: 'DELETE' });
+}
+
 export function createRequest(
   submittedBy: number,
   departmentId: number,
@@ -282,6 +290,54 @@ export function analyzeIntake(text: string) {
   });
 }
 
+export type RequestQueue = 'submitted' | 'available' | 'claimed' | 'completed' | 'department';
+
+export type QueueRequest = {
+  id: number;
+  title: string | null;
+  submittedAt: string;
+  approvalState: ApprovalState | null;
+  capturedApprovalPolicy: ApprovalPolicy | null;
+  currentOwnerId: number | null;
+  status: ServiceRequest['status'];
+  submitter: NamedRef;
+  department: NamedRef;
+  canOpen?: boolean;
+};
+
+export type RequestSummary = {
+  submissions: {
+    awaitingApproval: number;
+    denied: number;
+    awaitingHandler: number;
+    approvedAwaitingHandler: number;
+    claimed: number;
+    inProgress: number;
+    completed: number;
+  };
+  handling: { available: number; claimed: number; completed: number } | null;
+  departmentApprovals: number | null;
+  myRequests: MyRequestCounts;
+};
+
+export function getRequestSummary() {
+  return send<RequestSummary>('/requests/summary');
+}
+
+export function listRequestQueue(
+  queue: RequestQueue,
+  filters?: { q?: string; approvalState?: string; workStatus?: string; assignment?: string },
+) {
+  const params = new URLSearchParams({ queue });
+  if (filters?.q) params.set('q', filters.q);
+  if (filters?.approvalState) params.set('approvalState', filters.approvalState);
+  if (filters?.workStatus) params.set('workStatus', filters.workStatus);
+  if (filters?.assignment === 'unclaimed' || filters?.assignment === 'claimed') {
+    params.set('assignment', filters.assignment);
+  }
+  return send<{ queue: RequestQueue; items: QueueRequest[] }>(`/requests?${params.toString()}`);
+}
+
 export function getRequest(id: number) {
   return send<ServiceRequest>(`/requests/${id}`);
 }
@@ -304,10 +360,16 @@ export function transition(id: number, to: 'IN_PROGRESS' | 'COMPLETED', changedB
   });
 }
 
-export function signupCompany(companyName: string, name: string, email: string, password: string) {
+export function signupCompany(
+  companyName: string,
+  name: string,
+  email: string,
+  password: string,
+  departments?: { name: string; requestTypes: { name: string; approvalPolicy: ApprovalPolicy }[] }[],
+) {
   return send<{ pending: true; companyName: string; email: string }>('/auth/signup', {
     method: 'POST',
-    body: JSON.stringify({ companyName, name, email, password }),
+    body: JSON.stringify({ companyName, name, email, password, ...(departments ? { departments } : {}) }),
   });
 }
 
@@ -320,6 +382,45 @@ export function verifyEmail(token: string) {
 
 export function acceptInvitation(token: string, password: string) {
   return send<{ accepted: true }>('/auth/invitations/accept', {
+    method: 'POST',
+    body: JSON.stringify({ token, password }),
+  });
+}
+
+export function updateProfile(name: string) {
+  return send<Omit<SessionUser, 'csrfToken'>>('/auth/me', {
+    method: 'PATCH',
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function changePassword(input: {
+  currentPassword: string;
+  newPassword: string;
+  confirmPassword: string;
+}) {
+  return send<{ changed: true }>('/auth/change-password', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateCompanyName(name: string) {
+  return send<Omit<SessionUser, 'csrfToken'>>('/auth/company', {
+    method: 'PATCH',
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function requestPasswordReset(email: string) {
+  return send<{ sent: true; message: string }>('/auth/forgot-password', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
+}
+
+export function resetPassword(token: string, password: string) {
+  return send<{ reset: true }>('/auth/reset-password', {
     method: 'POST',
     body: JSON.stringify({ token, password }),
   });
@@ -375,14 +476,77 @@ export function inviteStaff(input: {
   });
 }
 
-export type DashboardCounts = {
+export type StaffEditInput = {
+  name?: string;
+  departmentId?: number;
+  role?: 'EMPLOYEE' | 'DEPARTMENT_ADMIN' | 'SUPER_ADMIN';
+  canHandle?: boolean;
+  active?: boolean;
+};
+
+export function updateCompanyEmployee(id: number, input: StaffEditInput) {
+  return send<CompanyEmployee>(`/admin/employees/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+}
+
+export function deactivateCompanyEmployee(id: number) {
+  return send<CompanyEmployee>(`/admin/employees/${id}/deactivate`, { method: 'POST' });
+}
+
+export function updateDepartmentEmployee(id: number, input: { name?: string; canHandle?: boolean }) {
+  return send<CompanyEmployee>(`/department/employees/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+}
+
+export function deactivateDepartmentEmployee(id: number) {
+  return send<CompanyEmployee>(`/department/employees/${id}/deactivate`, { method: 'POST' });
+}
+
+export type PeopleCounts = {
+  total: number;
+  admins: number;
+  handlers: number;
   employees: number;
-  departments: number;
-  requests: number;
+};
+
+export type RequestWorkCounts = {
+  total: number;
   submitted: number;
   inProgress: number;
   completed: number;
-  activeRequests: number;
+  claimed: number;
+  unclaimed: number;
+  active: number;
+};
+
+export type ApprovalCounts = {
+  total: number;
+  awaiting: number;
+  approved: number;
+  denied: number;
+};
+
+export type MyRequestCounts = {
+  total: number;
+  submitted: number;
+  completed: number;
+  inProgress: number;
+  unclaimed: number;
+  awaitingApproval: number;
+  approved: number;
+  denied: number;
+};
+
+export type DashboardCounts = {
+  people: PeopleCounts;
+  requests: RequestWorkCounts;
+  approvals: ApprovalCounts;
+  departments: number;
+  myRequests: MyRequestCounts;
 };
 
 export type CompanyEmployee = {
@@ -398,13 +562,63 @@ export type CompanyEmployee = {
 export type EmployeeListFilters = {
   q?: string;
   departmentId?: number;
-  role?: 'EMPLOYEE' | 'DEPARTMENT_ADMIN' | 'SUPER_ADMIN' | '';
+  role?: 'EMPLOYEE' | 'DEPARTMENT_ADMIN' | 'SUPER_ADMIN' | 'ADMIN' | '';
   canHandle?: '' | 'true' | 'false';
   active?: '' | 'true' | 'false';
 };
 
 export function getDashboardCounts() {
   return send<DashboardCounts>('/admin/dashboard');
+}
+
+export type DepartmentOverviewRow = {
+  id: number;
+  name: string;
+  employees: number;
+  departmentAdmins: string[];
+  requests: number;
+  awaitingApproval: number;
+};
+
+export function getDepartmentOverview() {
+  return send<{ items: DepartmentOverviewRow[] }>('/admin/department-overview');
+}
+
+export type DepartmentDashboardCounts = {
+  departmentId: number;
+  people: PeopleCounts;
+  requests: RequestWorkCounts;
+  approvals: ApprovalCounts;
+  myRequests: MyRequestCounts;
+};
+
+export type DepartmentRequestFilters = {
+  status?: '' | 'ACTIVE' | 'SUBMITTED' | 'IN_PROGRESS' | 'COMPLETED';
+  assignment?: '' | 'all' | 'unassigned' | 'assigned';
+  q?: string;
+};
+
+export function getDepartmentRequests(filters: DepartmentRequestFilters = {}) {
+  const params = new URLSearchParams();
+  if (filters.status) params.set('status', filters.status);
+  if (filters.assignment === 'unassigned' || filters.assignment === 'assigned') {
+    params.set('assignment', filters.assignment);
+  }
+  if (filters.q) params.set('q', filters.q);
+  const query = params.toString();
+  return send<{ items: QueueRequest[]; total: number }>(`/department/requests${query ? `?${query}` : ''}`);
+}
+
+export function getDepartmentDashboard() {
+  return send<DepartmentDashboardCounts>('/department/dashboard');
+}
+
+export function getDepartmentEmployees(filters: { canHandle?: '' | 'true' | 'false'; role?: string } = {}) {
+  const params = new URLSearchParams();
+  if (filters.canHandle === 'true' || filters.canHandle === 'false') params.set('canHandle', filters.canHandle);
+  if (filters.role) params.set('role', filters.role);
+  const query = params.toString();
+  return send<CompanyEmployee[]>(query ? `/department/employees?${query}` : '/department/employees');
 }
 
 export function getCompanyEmployees(filters: EmployeeListFilters = {}) {
@@ -466,8 +680,11 @@ export function getCompanyRequests(filters: CompanyRequestFilters = {}) {
   return send<CompanyRequestList>(query ? `/admin/requests?${query}` : '/admin/requests');
 }
 
-export function getApprovalInbox() {
-  return send<{ items: ServiceRequest[] }>('/requests/approvals');
+export function getApprovalInbox(status = '') {
+  const params = new URLSearchParams();
+  if (status) params.set('status', status);
+  const query = params.toString();
+  return send<{ items: ServiceRequest[] }>(query ? `/requests/approvals?${query}` : '/requests/approvals');
 }
 
 export function decideApproval(id: number, decision: 'APPROVED' | 'DENIED', reason?: string) {

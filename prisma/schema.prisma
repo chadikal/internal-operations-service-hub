@@ -55,6 +55,7 @@ model Company {
   sessions           Session[]
   emailVerifications EmailVerification[]
   invitations        Invitation[]
+  passwordResets     PasswordReset[]
   approvalDecisions  ApprovalDecision[]
 }
 
@@ -103,6 +104,7 @@ model Employee {
   emailVerifications EmailVerification[]
   invitation         Invitation?         @relation("InvitedAccount")
   sentInvitations    Invitation[]        @relation("InvitedBy")
+  passwordResets     PasswordReset[]
   approvalDecisions  ApprovalDecision[]  @relation("ApprovalApprover")
 
   @@index([companyId])
@@ -132,8 +134,10 @@ model Request {
   capturedApprovalPolicy  ApprovalPolicy?
   approvalState           ApprovalState?
   currentOwnerId          Int?
+  claimedAt               DateTime?
   status                  RequestStatus          @default(SUBMITTED)
   statusUpdatedAt         DateTime
+  submittedAt             DateTime               @default(now())
   title                   String?
   description             String?
   company                 Company                @relation(fields: [companyId], references: [id])
@@ -205,4 +209,18 @@ model Invitation {
   invitedBy   Employee  @relation("InvitedBy", fields: [invitedById], references: [id])
 
   @@index([companyId])
+}
+
+model PasswordReset {
+  tokenHash String    @id
+  companyId Int
+  accountId Int
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  company   Company   @relation(fields: [companyId], references: [id])
+  account   Employee  @relation(fields: [accountId], references: [id])
+
+  @@index([companyId])
+  @@index([accountId])
 }

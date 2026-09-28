@@ -36,6 +36,7 @@ export async function removeSignupCompanies() {
     }
     await prisma.emailVerification.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.invitation.deleteMany({ where: { companyId: { in: companyIds } } });
+    await prisma.passwordReset.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.session.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.requestStatusHistory.deleteMany({ where: { companyId: { in: companyIds } } });
     await prisma.approvalDecision.deleteMany({ where: { companyId: { in: companyIds } } });
@@ -56,6 +57,32 @@ export async function cleanRequestData() {
     await prisma.approvalDecision.deleteMany();
     await prisma.requestStatusHistory.deleteMany();
     await prisma.request.deleteMany();
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
+export async function setDevelopmentDepartmentName(id: number, name: string) {
+  const databaseUrl = loadTestEnv();
+  assertTestDatabase(databaseUrl);
+  const prisma = new PrismaClient();
+  try {
+    await prisma.department.update({ where: { id }, data: { name } });
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
+export async function setDevelopmentAccountRole(
+  id: number,
+  role: 'EMPLOYEE' | 'DEPARTMENT_ADMIN',
+  canHandle: boolean,
+) {
+  const databaseUrl = loadTestEnv();
+  assertTestDatabase(databaseUrl);
+  const prisma = new PrismaClient();
+  try {
+    await prisma.employee.update({ where: { id }, data: { role, canHandle } });
   } finally {
     await prisma.$disconnect();
   }

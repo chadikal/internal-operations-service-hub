@@ -11,11 +11,18 @@ import {
 } from '@nestjs/common';
 import { AccountRole, ApprovalPolicy, CompanyStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { appLinkOrigin, EmailSender, EMAIL_VERIFICATION_TTL_MS, INVITATION_TTL_MS } from './email-sender';
+import {
+  appLinkOrigin,
+  EmailSender,
+  EMAIL_VERIFICATION_TTL_MS,
+  INVITATION_TTL_MS,
+  PASSWORD_RESET_TTL_MS,
+} from './email-sender';
 import { loginEmailKey, normalizeEmail } from './email';
 import { assertJwtSecret } from './jwt-secret';
 import { LoginRateLimiter, RateLimitError } from './login-rate-limit';
 import { hashPassword, verifyAgainstDummy, verifyPassword } from './password';
+import { storedCanHandle } from './handler-access';
 import { toPublicAccount, PublicAccount } from './public-account';
 import {
   ABSOLUTE_SESSION_MS,
@@ -35,8 +42,11 @@ import { hashOpaqueToken } from './token-hash';
 const INVALID_LOGIN = 'Invalid email or password';
 const INVALID_LINK = 'This link is invalid or expired.';
 const USED_LINK = 'This link has already been used.';
+export const PASSWORD_RESET_ACK =
+  'If an account exists for that email, a reset link has been sent.';
 const EMAIL_IN_USE = 'An account with this email already exists';
 const DEPARTMENT_IN_USE = 'A department with employees or requests cannot be deleted';
+const REQUEST_TYPE_IN_USE = 'A request type that is used by requests cannot be removed';
 const UNKNOWN_TEMPLATE = 'Unknown department template';
 const DUPLICATE_CONFIRMED_NAMES = 'Confirmed request types must not use the same name more than once';
 
@@ -236,6 +246,10 @@ export class AuthService implements OnModuleInit {
     name: string;
     email: string;
     password: string;
+    departments?: {
+      name: string;
+      requestTypes: { name: string; approvalPolicy: 'NONE' | 'DEPARTMENT_ADMIN' | 'SUPER_ADMIN' }[];
+    }[];
   }): Promise<{ pending: true; companyName: string; email: string }> {
     const email = normalizeEmail(input.email);
     const companyName = input.companyName.trim();
@@ -259,12 +273,20 @@ export class AuthService implements OnModuleInit {
         const company = await tx.company.create({
           data: { name: companyName, status: CompanyStatus.PENDING },
         });
-        await tx.department.createMany({
-          data: DEFAULT_COMPANY_DEPARTMENTS.map((departmentName) => ({
-            name: departmentName,
-            companyId: company.id,
-          })),
-        });
+        const departments =
+          input.departments === undefined
+            ? DEFAULT_COMPANY_DEPARTMENTS.map((departmentName) => ({
+                name: departmentName,
+                requestTypes: [] as ConfirmedRequestType[],
+              }))
+            : this.confirmedSignupDepartments(input.departments);
+        for (const department of departments) {
+          const created = await tx.department.create({
+            data: { name: department.name, companyId: company.id },
+            select: { id: true },
+          });
+          await this.insertConfirmedTypes(tx, created.id, company.id, department.requestTypes);
+        }
         const account = await tx.employee.create({
           data: {
             name,
@@ -273,7 +295,7 @@ export class AuthService implements OnModuleInit {
             departmentId: null,
             passwordHash,
             role: AccountRole.SUPER_ADMIN,
-            canHandle: false,
+            canHandle: storedCanHandle(AccountRole.SUPER_ADMIN, false),
             active: false,
           },
         });
@@ -407,7 +429,7 @@ export class AuthService implements OnModuleInit {
     id: number,
     name: string,
   ): Promise<{ id: number; name: string }> {
-    this.assertCompanySuperAdmin(actor);
+    await this.assertCanRenameDepartment(actor, id);
     const trimmed = this.requireDepartmentName(name);
     const updated = await this.prisma.department.updateMany({
       where: { id, companyId: actor.companyId },
@@ -513,6 +535,58 @@ export class AuthService implements OnModuleInit {
     return updated;
   }
 
+  async deleteRequestType(actor: SessionAccount, id: number): Promise<{ deleted: true }> {
+    this.assertCompanySuperAdmin(actor);
+    const existing = await this.prisma.requestType.findFirst({
+      where: { id, companyId: actor.companyId },
+      select: { id: true },
+    });
+    if (!existing) {
+      throw new NotFoundException(`Request type ${id} was not found`);
+    }
+    const used = await this.prisma.request.count({
+      where: { requestTypeId: id, companyId: actor.companyId },
+    });
+    if (used > 0) {
+      throw new ConflictException(REQUEST_TYPE_IN_USE);
+    }
+    try {
+      await this.prisma.requestType.delete({ where: { id } });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2003') {
+        throw new ConflictException(REQUEST_TYPE_IN_USE);
+      }
+      throw error;
+    }
+    return { deleted: true };
+  }
+
+  private confirmedSignupDepartments(
+    departments: {
+      name: string;
+      requestTypes: { name: string; approvalPolicy: 'NONE' | 'DEPARTMENT_ADMIN' | 'SUPER_ADMIN' }[];
+    }[],
+  ): { name: string; requestTypes: ConfirmedRequestType[] }[] {
+    const seen = new Set<string>();
+    return departments.map((department) => {
+      const name = this.requireDepartmentName(department.name);
+      const key = name.toLowerCase();
+      if (seen.has(key)) {
+        throw new ConflictException('Department names must be unique');
+      }
+      seen.add(key);
+      return {
+        name,
+        requestTypes: this.normalizeConfirmedTypes(
+          department.requestTypes.map((item) => ({
+            name: item.name,
+            approvalPolicy: item.approvalPolicy as ApprovalPolicy,
+          })),
+        ),
+      };
+    });
+  }
+
   private requireDepartmentName(name: string): string {
     const trimmed = name.trim();
     if (trimmed.length === 0 || trimmed.length > 200) {
@@ -594,17 +668,17 @@ export class AuthService implements OnModuleInit {
       canHandle: boolean;
     },
   ): Promise<PublicAccount> {
-    this.assertCompanySuperAdmin(actor);
+    const invite = await this.resolveStaffInvite(actor, input);
     const email = normalizeEmail(input.email);
     const name = input.name.trim();
     if (name.length === 0 || name.length > 200) {
       throw new BadRequestException('name is required');
     }
     const department = await this.prisma.department.findFirst({
-      where: { id: input.departmentId, companyId: actor.companyId },
+      where: { id: invite.departmentId, companyId: actor.companyId },
     });
     if (!department) {
-      throw new BadRequestException(`Department ${input.departmentId} was not found`);
+      throw new BadRequestException(`Department ${invite.departmentId} was not found`);
     }
 
     this.emailSender.assertCanSend();
@@ -617,10 +691,10 @@ export class AuthService implements OnModuleInit {
             name,
             email,
             companyId: actor.companyId,
-            departmentId: input.departmentId,
+            departmentId: invite.departmentId,
             passwordHash: null,
-            role: input.role,
-            canHandle: input.role === AccountRole.SUPER_ADMIN ? false : input.canHandle,
+            role: invite.role,
+            canHandle: invite.canHandle,
             active: false,
           },
           include: { company: { select: { name: true, status: true } } },
@@ -692,9 +766,220 @@ export class AuthService implements OnModuleInit {
     return { accepted: true };
   }
 
+  async requestPasswordReset(emailInput: string): Promise<{ sent: true; message: string }> {
+    this.emailSender.assertCanSend();
+    let email: string;
+    try {
+      email = normalizeEmail(emailInput);
+    } catch (error) {
+      if (error instanceof BadRequestException) {
+        return { sent: true, message: PASSWORD_RESET_ACK };
+      }
+      throw error;
+    }
+    const employee = await this.prisma.employee.findUnique({
+      where: { email },
+      include: { company: { select: { status: true } } },
+    });
+    if (
+      !employee?.passwordHash ||
+      !employee.active ||
+      employee.company.status !== CompanyStatus.ACTIVE
+    ) {
+      return { sent: true, message: PASSWORD_RESET_ACK };
+    }
+
+    const rawToken = newSecretToken();
+    const now = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      await tx.passwordReset.updateMany({
+        where: { accountId: employee.id, usedAt: null },
+        data: { usedAt: now },
+      });
+      await tx.passwordReset.create({
+        data: {
+          tokenHash: hashOpaqueToken(rawToken),
+          companyId: employee.companyId,
+          accountId: employee.id,
+          expiresAt: new Date(now.getTime() + PASSWORD_RESET_TTL_MS),
+        },
+      });
+      await this.emailSender.send({
+        to: email,
+        purpose: 'password-reset',
+        subject: 'Reset your password',
+        text: `Reset your password: ${appLinkOrigin()}/?reset=${rawToken}`,
+        token: rawToken,
+      });
+    });
+    return { sent: true, message: PASSWORD_RESET_ACK };
+  }
+
+  async resetPassword(token: string, password: string): Promise<{ reset: true }> {
+    if (password.length < 12) {
+      throw new BadRequestException('password must be at least 12 characters');
+    }
+    const tokenHash = hashOpaqueToken(token);
+    const now = new Date();
+    const passwordHash = await hashPassword(password);
+    await this.prisma.$transaction(async (tx) => {
+      const row = await tx.passwordReset.findUnique({
+        where: { tokenHash },
+        include: { account: { select: { active: true } }, company: { select: { status: true } } },
+      });
+      if (
+        !row ||
+        !row.account.active ||
+        row.company.status !== CompanyStatus.ACTIVE
+      ) {
+        throw new BadRequestException(INVALID_LINK);
+      }
+      if (row.usedAt) {
+        throw new BadRequestException(USED_LINK);
+      }
+      if (row.expiresAt.getTime() <= now.getTime()) {
+        throw new BadRequestException(INVALID_LINK);
+      }
+      const claimed = await tx.passwordReset.updateMany({
+        where: { tokenHash, usedAt: null, expiresAt: { gt: now } },
+        data: { usedAt: now },
+      });
+      if (claimed.count !== 1) {
+        const again = await tx.passwordReset.findUnique({ where: { tokenHash } });
+        if (again?.usedAt) {
+          throw new BadRequestException(USED_LINK);
+        }
+        throw new BadRequestException(INVALID_LINK);
+      }
+      await tx.employee.update({
+        where: { id: row.accountId },
+        data: { passwordHash },
+      });
+      await tx.session.updateMany({
+        where: { accountId: row.accountId, revokedAt: null },
+        data: { revokedAt: now },
+      });
+    });
+    return { reset: true };
+  }
+
+  private async resolveStaffInvite(
+    actor: SessionAccount,
+    input: { departmentId: number; role: AccountRole; canHandle: boolean },
+  ): Promise<{ departmentId: number; role: AccountRole; canHandle: boolean }> {
+    if (actor.role === AccountRole.DEPARTMENT_ADMIN) {
+      if (actor.departmentId == null) {
+        throw new ForbiddenException('You are not assigned to a department');
+      }
+      if (input.role !== AccountRole.EMPLOYEE) {
+        throw new ForbiddenException('You can only invite employees');
+      }
+      if (input.departmentId !== actor.departmentId) {
+        const inCompany = await this.prisma.department.findFirst({
+          where: { id: input.departmentId, companyId: actor.companyId },
+          select: { id: true },
+        });
+        if (!inCompany) {
+          throw new BadRequestException(`Department ${input.departmentId} was not found`);
+        }
+        throw new ForbiddenException('You can only invite staff into your own department');
+      }
+      return {
+        departmentId: actor.departmentId,
+        role: AccountRole.EMPLOYEE,
+        canHandle: input.canHandle,
+      };
+    }
+    if (actor.role !== AccountRole.SUPER_ADMIN) {
+      throw new ForbiddenException('Only a Super Admin can manage this company');
+    }
+    return {
+      departmentId: input.departmentId,
+      role: input.role,
+      canHandle: storedCanHandle(input.role, input.canHandle),
+    };
+  }
+
+  async updateProfile(actor: SessionAccount, name: string): Promise<PublicAccount> {
+    const updated = await this.prisma.employee.update({
+      where: { id: actor.id },
+      data: { name },
+      include: { company: { select: { name: true } } },
+    });
+    return toPublicAccount(updated);
+  }
+
+  async changePassword(
+    actor: SessionAccount,
+    input: { currentPassword: string; newPassword: string; confirmPassword: string },
+  ): Promise<{ changed: true }> {
+    if (input.newPassword !== input.confirmPassword) {
+      throw new BadRequestException('Passwords do not match');
+    }
+    const account = await this.prisma.employee.findUnique({
+      where: { id: actor.id },
+      select: { passwordHash: true },
+    });
+    const matches = account?.passwordHash
+      ? await verifyPassword(account.passwordHash, input.currentPassword)
+      : false;
+    if (!matches) {
+      throw new BadRequestException('Current password is incorrect');
+    }
+    const passwordHash = await hashPassword(input.newPassword);
+    const now = new Date();
+    await this.prisma.$transaction([
+      this.prisma.employee.update({
+        where: { id: actor.id },
+        data: { passwordHash },
+      }),
+      this.prisma.session.updateMany({
+        where: { accountId: actor.id, revokedAt: null, id: { not: actor.sessionId } },
+        data: { revokedAt: now },
+      }),
+    ]);
+    return { changed: true };
+  }
+
+  async updateCompany(actor: SessionAccount, name: string): Promise<PublicAccount> {
+    this.assertCompanySuperAdmin(actor);
+    await this.prisma.company.update({
+      where: { id: actor.companyId },
+      data: { name },
+    });
+    const account = await this.prisma.employee.findUniqueOrThrow({
+      where: { id: actor.id },
+      include: { company: { select: { name: true } } },
+    });
+    return toPublicAccount(account);
+  }
+
   assertCompanySuperAdmin(actor: SessionAccount): void {
     if (actor.role !== AccountRole.SUPER_ADMIN) {
       throw new ForbiddenException('Only a Super Admin can manage this company');
     }
+  }
+
+  private async assertCanRenameDepartment(actor: SessionAccount, id: number): Promise<void> {
+    if (actor.role === AccountRole.SUPER_ADMIN) {
+      return;
+    }
+    if (actor.role !== AccountRole.DEPARTMENT_ADMIN) {
+      throw new ForbiddenException('Only a Super Admin can manage this company');
+    }
+    if (actor.departmentId == null) {
+      throw new ForbiddenException('You are not assigned to a department');
+    }
+    if (id === actor.departmentId) {
+      return;
+    }
+    const inCompany = await this.prisma.department.findFirst({
+      where: { id, companyId: actor.companyId },
+      select: { id: true },
+    });
+    if (!inCompany) {
+      throw new NotFoundException(`Department ${id} was not found`);
+    }
+    throw new ForbiddenException('You can only edit your own department');
   }
 }

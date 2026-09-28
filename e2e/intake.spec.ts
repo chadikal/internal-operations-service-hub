@@ -16,6 +16,7 @@ test.describe('Request intake', () => {
     page,
   }) => {
     await login(page, 'john@operations-hub.test');
+    await page.getByRole('button', { name: 'AI Intake' }).click();
 
     await page.getByLabel('What do you need?').fill('I need help.');
     await page.getByRole('button', { name: 'Analyze' }).click();
@@ -53,6 +54,7 @@ test.describe('Request intake', () => {
 
   test('clear need still offers to prepare a request', async ({ page }) => {
     await login(page, 'john@operations-hub.test');
+    await page.getByRole('button', { name: 'AI Intake' }).click();
 
     await page.getByLabel('What do you need?').fill('I need a laptop.');
     await page.getByRole('button', { name: 'Analyze' }).click();
@@ -71,6 +73,7 @@ test.describe('Request intake', () => {
 
   test('failed re-analyze does not keep the previous AI result', async ({ page }) => {
     await login(page, 'john@operations-hub.test');
+    await page.getByRole('button', { name: 'AI Intake' }).click();
 
     await page.getByLabel('What do you need?').fill('I need a laptop.');
     await page.getByRole('button', { name: 'Analyze' }).click();
@@ -106,6 +109,7 @@ test.describe('Request intake', () => {
 
   test('optional suggestions do not block preparing a request', async ({ page }) => {
     await login(page, 'john@operations-hub.test');
+    await page.getByRole('button', { name: 'AI Intake' }).click();
 
     await page.getByLabel('What do you need?').fill('I need an employment certificate from HR.');
     await page.getByRole('button', { name: 'Analyze' }).click();
@@ -124,6 +128,7 @@ test.describe('Request intake', () => {
     page,
   }) => {
     await login(page, 'john@operations-hub.test');
+    await page.getByRole('button', { name: 'AI Intake' }).click();
 
     let intakeCalls = 0;
     await page.route('**/ai/intake', async (route) => {
@@ -177,6 +182,7 @@ test.describe('Request intake', () => {
     page,
   }) => {
     await login(page, 'john@operations-hub.test');
+    await page.getByRole('button', { name: 'AI Intake' }).click();
 
     await page.getByLabel('What do you need?').fill("I can't access the VPN; I need permission.");
     await page.getByRole('button', { name: 'Analyze' }).click();
@@ -204,6 +210,7 @@ test.describe('Request intake', () => {
     const software = await addDevelopmentRequestType('IT', 'Software');
     try {
       await login(page, 'john@operations-hub.test');
+      await page.getByRole('button', { name: 'AI Intake' }).click();
       await page.route('**/ai/intake', async (route) => {
         await route.fulfill({
           status: 200,

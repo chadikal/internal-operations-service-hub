@@ -22,8 +22,13 @@ export class LookupsController {
   @Get('employees')
   @RecordsActivity()
   findEmployees(@Req() request: AuthenticatedRequest) {
+    const actor = request.auth!;
+    const where =
+      actor.role === 'DEPARTMENT_ADMIN'
+        ? { companyId: actor.companyId, departmentId: actor.departmentId ?? -1 }
+        : { companyId: actor.companyId };
     return this.prisma.employee.findMany({
-      where: { companyId: request.auth!.companyId },
+      where,
       select: { id: true, name: true, departmentId: true, canHandle: true },
       orderBy: { id: 'asc' },
     });
@@ -126,5 +131,11 @@ export class LookupsController {
       name: dto.name,
       approvalPolicy: dto.approvalPolicy as ApprovalPolicy | undefined,
     });
+  }
+
+  @Delete('request-types/:id')
+  @RecordsActivity()
+  deleteRequestType(@Req() request: AuthenticatedRequest, @Param('id', ParseIntPipe) id: number) {
+    return this.authService.deleteRequestType(request.auth!, id);
   }
 }

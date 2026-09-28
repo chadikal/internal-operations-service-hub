@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import {
   ApiError,
   CompanyRequestFilters,
@@ -14,7 +14,9 @@ import {
   ServiceRequest,
   StaleSessionResult,
 } from './api';
-import { ApprovalFacts } from './approvals';
+import { FormOverlay } from './form-overlay';
+import { AuthorizedRequestDetail } from './request-detail';
+import { ClampedTitle, ClippedText, ReadableText, requestColumn } from './request-table';
 import { adminPath } from './routing';
 
 function statusClass(status: ServiceRequest['status']) {
@@ -23,14 +25,8 @@ function statusClass(status: ServiceRequest['status']) {
   return 'badge badge-completed';
 }
 
-function formatWhen(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString();
-}
 
 type RequestQueryState = {
-  scope: 'all' | 'mine';
   status: string;
   departmentId: string;
   assignment: string;
@@ -41,19 +37,17 @@ type RequestQueryState = {
 
 function readRequestQuery(): RequestQueryState {
   const params = new URLSearchParams(window.location.search);
-  const scope: 'all' | 'mine' = params.get('scope') === 'mine' ? 'mine' : 'all';
   const status = params.get('status') ?? '';
   const departmentId = params.get('departmentId') ?? '';
   const assignment = params.get('assignment') ?? '';
   const q = params.get('q') ?? '';
   const page = Math.max(1, Number(params.get('page') || '1') || 1);
   const open = params.get('open') ?? '';
-  return { scope, status, departmentId, assignment, q, page, open };
+  return { status, departmentId, assignment, q, page, open };
 }
 
 function writeRequestQuery(next: RequestQueryState, replace: boolean) {
   const path = adminPath('requests', {
-    scope: next.scope === 'mine' ? 'mine' : undefined,
     status: next.status || undefined,
     departmentId: next.departmentId || undefined,
     assignment: next.assignment === 'unassigned' || next.assignment === 'assigned' ? next.assignment : undefined,
@@ -74,17 +68,14 @@ function writeRequestQuery(next: RequestQueryState, replace: boolean) {
 
 export function AdminRequestsPage({
   createdRequestId,
-  compose,
   onUnauthorized,
   urlSearch,
 }: {
   createdRequestId: number | null;
-  compose: ReactNode;
   onUnauthorized: () => void;
   urlSearch: string;
 }) {
   const initial = readRequestQuery();
-  const [scope, setScope] = useState<'all' | 'mine'>(initial.scope);
   const [status, setStatus] = useState(initial.status);
   const [departmentId, setDepartmentId] = useState(initial.departmentId);
   const [assignment, setAssignment] = useState(initial.assignment);
@@ -99,12 +90,11 @@ export function AdminRequestsPage({
   const [history, setHistory] = useState<HistoryRecord[]>([]);
 
   function queryState() {
-    return { scope, status, departmentId, assignment, q, page, open: openId };
+    return { status, departmentId, assignment, q, page, open: openId };
   }
 
   async function loadList(generation: number, next = queryState()) {
     const result = await getCompanyRequests({
-      scope: next.scope,
       departmentId: next.departmentId ? Number(next.departmentId) : undefined,
       status: next.status as CompanyRequestFilters['status'],
       assignment: next.assignment as CompanyRequestFilters['assignment'],
@@ -128,7 +118,6 @@ export function AdminRequestsPage({
 
   useEffect(() => {
     const next = readRequestQuery();
-    setScope(next.scope);
     setStatus(next.status);
     setDepartmentId(next.departmentId);
     setAssignment(next.assignment);
@@ -160,7 +149,7 @@ export function AdminRequestsPage({
         setError(err instanceof Error ? err.message : 'Could not load requests');
       })
       .finally(() => setLoading(false));
-  }, [scope, status, departmentId, assignment, q, page]);
+  }, [status, departmentId, assignment, q, page]);
 
   useEffect(() => {
     if (!openId) {
@@ -209,7 +198,6 @@ export function AdminRequestsPage({
   }, [createdRequestId]);
 
   function changeFilters(patch: Partial<RequestQueryState>) {
-    if (patch.scope != null) setScope(patch.scope);
     if (patch.status != null) setStatus(patch.status);
     if (patch.departmentId != null) setDepartmentId(patch.departmentId);
     if (patch.assignment != null) setAssignment(patch.assignment);
@@ -233,36 +221,9 @@ export function AdminRequestsPage({
       <header className="workspace-header">
         <h2>Requests</h2>
         <p className="muted">
-          Company-wide oversight is ID, submitter, title, employee department, destination
-          department, and status. Super Admin can open details only for requests they submitted.
-          Unassigned is not claimable. Super Admin cannot own, assign, claim, or change work
-          status.
+          Company requests. Details open only for a request you submitted.
         </p>
       </header>
-
-      <div className="tab-list" role="tablist" aria-label="Request lists">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={scope === 'all'}
-          className={scope === 'all' ? 'tab-active' : 'tab'}
-          onClick={() => changeFilters({ scope: 'all' })}
-        >
-          All requests
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={scope === 'mine'}
-          className={scope === 'mine' ? 'tab-active' : 'tab'}
-          onClick={() => changeFilters({ scope: 'mine' })}
-        >
-          My requests
-        </button>
-      </div>
-      {scope === 'mine' ? (
-        <p className="muted">Requests you submitted, across departments. This is not requests assigned to you.</p>
-      ) : null}
 
       <form
         className="filters"
@@ -276,9 +237,9 @@ export function AdminRequestsPage({
           <input value={q} onChange={(event) => changeFilters({ q: event.target.value })} />
         </label>
         <label>
-          Department
+          {requestColumn.destinationDepartment}
           <select value={departmentId} onChange={(event) => changeFilters({ departmentId: event.target.value })}>
-            <option value="">All departments</option>
+            <option value="">All</option>
             {departments.map((department) => (
               <option key={department.id} value={department.id}>
                 {department.name}
@@ -287,21 +248,21 @@ export function AdminRequestsPage({
           </select>
         </label>
         <label>
-          Work status
+          {requestColumn.workStatus}
           <select value={status} onChange={(event) => changeFilters({ status: event.target.value })}>
             <option value="">All statuses</option>
-            <option value="ACTIVE">Active (SUBMITTED + IN_PROGRESS)</option>
-            <option value="SUBMITTED">SUBMITTED</option>
-            <option value="IN_PROGRESS">IN_PROGRESS</option>
-            <option value="COMPLETED">COMPLETED</option>
+            <option value="ACTIVE">Active</option>
+            <option value="SUBMITTED">Submitted</option>
+            <option value="IN_PROGRESS">In Progress</option>
+            <option value="COMPLETED">Completed</option>
           </select>
         </label>
         <label>
-          Assignment
-          <select value={assignment} onChange={(event) => changeFilters({ assignment: event.target.value })}>
+          Claim Status
+          <select aria-label="Claim Status" value={assignment} onChange={(event) => changeFilters({ assignment: event.target.value })}>
             <option value="">All</option>
-            <option value="unassigned">Unassigned</option>
-            <option value="assigned">Assigned</option>
+            <option value="unassigned">Unclaimed</option>
+            <option value="assigned">Claimed</option>
           </select>
         </label>
       </form>
@@ -311,54 +272,68 @@ export function AdminRequestsPage({
           {error}
         </div>
       ) : null}
-      {loading ? <p>Loading requests…</p> : null}
-      {!loading && list && list.items.length === 0 ? (
-        <p className="muted" data-testid="requests-empty">
-          No requests match these filters.
-        </p>
-      ) : null}
-      {!loading && list && list.items.length > 0 ? (
+      {loading ? <p className="muted">Loading requests…</p> : null}
+      {!loading && list ? (
         <div className="table-wrap">
-          <table className="data-table" data-testid="request-table">
+          <table className="data-table request-table" data-testid="request-table">
+            <colgroup>
+              <col className="col-id" />
+              <col className="col-title" />
+              <col className="col-submitter" />
+              <col className="col-department" />
+              <col className="col-department" />
+              <col className="col-state" />
+            </colgroup>
             <thead>
               <tr>
-                <th scope="col">ID</th>
-                <th scope="col">Title</th>
-                <th scope="col">Submitter</th>
-                <th scope="col">Employee department</th>
-                <th scope="col">Destination department</th>
-                <th scope="col">Status</th>
+                <th className="col-id" scope="col">{requestColumn.id}</th>
+                <th className="col-title" scope="col">{requestColumn.title}</th>
+                <th className="col-submitter" scope="col">{requestColumn.submitter}</th>
+                <th className="col-department" scope="col">{requestColumn.employeeDepartment}</th>
+                <th className="col-department" scope="col">{requestColumn.destinationDepartment}</th>
+                <th className="col-state" scope="col">{requestColumn.workStatus}</th>
               </tr>
             </thead>
             <tbody>
+              {list.items.length === 0 ? (
+                <tr>
+                  <td className="table-empty" colSpan={6} data-testid="requests-empty">
+                    No requests match these filters.
+                  </td>
+                </tr>
+              ) : null}
               {list.items.map((row) => (
                 <tr
                   key={row.id}
                   data-testid={`request-row-${row.id}`}
                   className={openId === String(row.id) ? 'row-selected' : undefined}
                 >
-                  <td>
+                  <td className="col-id">
                     {row.mine ? (
                       <button className="link-button" type="button" onClick={() => openRow(row)}>
                         #{row.id}
                       </button>
                     ) : (
-                      `#${row.id}`
+                      <ClippedText text={`#${row.id}`} />
                     )}
                   </td>
-                  <td>
-                    {row.mine ? (
-                      <button className="link-button" type="button" onClick={() => openRow(row)}>
-                        {row.title ? row.title : '—'}
-                      </button>
-                    ) : (
-                      row.title ? row.title : '—'
-                    )}
+                  <td className="col-title">
+                    <ClampedTitle
+                      text={row.title ? row.title : '—'}
+                      buttonId={row.mine ? `oversight-request-${row.id}` : undefined}
+                      onOpen={row.mine ? () => openRow(row) : undefined}
+                    />
                   </td>
-                  <td>{row.submitter.name}</td>
-                  <td>{row.submitterDepartment ? row.submitterDepartment.name : '—'}</td>
-                  <td>{row.department.name}</td>
-                  <td>
+                  <td className="col-submitter">
+                    <ReadableText text={row.submitter.name} />
+                  </td>
+                  <td className="col-department">
+                    <ClippedText text={row.submitterDepartment ? row.submitterDepartment.name : '—'} />
+                  </td>
+                  <td className="col-department">
+                    <ClippedText text={row.department.name} />
+                  </td>
+                  <td className="col-state">
                     <span className={statusClass(row.status)}>{row.status.replace('_', ' ')}</span>
                   </td>
                 </tr>
@@ -387,90 +362,23 @@ export function AdminRequestsPage({
       ) : null}
 
       {detail ? (
-        <>
-          <section className="card">
-            <div className="card-heading">
-              <h2>Request Details</h2>
-              <span className={statusClass(detail.status)} data-testid="request-status">
-                {detail.status.replace('_', ' ')}
-              </span>
-            </div>
-            <dl className="details">
-              <div>
-                <dt>Request ID</dt>
-                <dd data-testid="request-id">#{detail.id}</dd>
-              </div>
-              <div>
-                <dt>Submitter</dt>
-                <dd>{detail.submitter.name}</dd>
-              </div>
-              <div>
-                <dt>Department</dt>
-                <dd>{detail.department.name}</dd>
-              </div>
-              <div>
-                <dt>Request type</dt>
-                <dd>{detail.requestType ? detail.requestType.name : '—'}</dd>
-              </div>
-              <div>
-                <dt>Approval policy</dt>
-                <dd>
-                  {detail.capturedApprovalPolicy === 'DEPARTMENT_ADMIN'
-                    ? 'Department Admin'
-                    : detail.capturedApprovalPolicy === 'SUPER_ADMIN'
-                      ? 'Super Admin'
-                      : detail.capturedApprovalPolicy === 'NONE'
-                        ? 'None'
-                        : '—'}
-                </dd>
-              </div>
-              <ApprovalFacts request={detail} />
-              <div>
-                <dt>Owner</dt>
-                <dd>{detail.currentOwner ? detail.currentOwner.name : 'Unassigned'}</dd>
-              </div>
-              <div>
-                <dt>Status</dt>
-                <dd>{detail.status.replace('_', ' ')}</dd>
-              </div>
-              <div>
-                <dt>Title</dt>
-                <dd>{detail.title ? detail.title : '—'}</dd>
-              </div>
-              <div className="details-wide">
-                <dt>Description</dt>
-                <dd>{detail.description ? detail.description : '—'}</dd>
-              </div>
-            </dl>
-            <p className="muted">
-              Approval state is separate from work status. This Requests page opens details and
-              history only for requests you submitted. Unrelated company requests stay on the
-              oversight list. Decisions for requests you are eligible to approve are on Approvals.
-            </p>
-          </section>
-          <section className="card">
-            <h2>Status History</h2>
-            {history.length === 0 ? (
-              <p className="muted">No successful status changes yet.</p>
-            ) : (
-              <ol className="timeline" data-testid="status-history">
-                {history.map((record) => (
-                  <li key={record.id}>
-                    <strong>
-                      {record.previousStatus.replace('_', ' ')} → {record.newStatus.replace('_', ' ')}
-                    </strong>
-                    <span>
-                      by {record.changedByEmployee.name} · {formatWhen(record.changedAt)}
-                    </span>
-                  </li>
-                ))}
-              </ol>
-            )}
-          </section>
-        </>
+        <FormOverlay
+          title={`Request #${detail.id}`}
+          returnFocusId={`oversight-request-${detail.id}`}
+          onClose={() => {
+            setDetail(null);
+            setHistory([]);
+            setOpenId('');
+            writeRequestQuery({ ...queryState(), open: '' }, true);
+          }}
+        >
+          <AuthorizedRequestDetail
+            request={detail}
+            history={history}
+            note="This page opens details and history only for requests you submitted. Unrelated company requests stay on the oversight list."
+          />
+        </FormOverlay>
       ) : null}
-
-      {compose}
     </div>
   );
 }

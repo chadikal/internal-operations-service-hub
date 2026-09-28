@@ -11,13 +11,23 @@ test.describe('Account login', () => {
   test('rejects a wrong password and returns to the login form after logout', async ({ page }) => {
     await page.goto('/');
     await page.getByLabel('Email').fill('john@operations-hub.test');
-    await page.getByLabel('Password').fill('wrong-password-value');
+    const password = page.getByLabel('Password', { exact: true });
+    await expect(password).toHaveAttribute('type', 'password');
+    await page.getByRole('button', { name: 'Show password' }).click();
+    await expect(password).toHaveAttribute('type', 'text');
+    await page.getByRole('button', { name: 'Hide password' }).click();
+    await expect(password).toHaveAttribute('type', 'password');
+    await password.fill('wrong-password-value');
     await page.getByRole('button', { name: 'Log in' }).click();
     await expect(page.getByRole('alert')).toContainText('Invalid email or password');
+    await expect(page.getByRole('alert')).not.toContainText('401');
     await expect(page.getByRole('heading', { name: 'Create Request' })).toHaveCount(0);
 
     await login(page, 'john@operations-hub.test');
+    await expect(page.getByRole('heading', { name: 'Create Request' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'New Request' }).click();
     await expect(page.getByRole('heading', { name: 'Create Request' })).toBeVisible();
+    await page.getByTestId('close-form').click();
     await page.getByRole('button', { name: 'Log out' }).click();
     await expect(page.getByRole('heading', { name: 'Log in' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Create Request' })).toHaveCount(0);
@@ -25,6 +35,7 @@ test.describe('Account login', () => {
 
   test('clears the previous account after session expiry and a new login', async ({ page }) => {
     await login(page, 'john@operations-hub.test');
+    await page.getByRole('button', { name: 'New Request' }).click();
     const createCard = page.locator('section').filter({
       has: page.getByRole('heading', { name: 'Create Request', level: 2 }),
     });
@@ -32,8 +43,9 @@ test.describe('Account login', () => {
     await createCard.getByLabel('Request type').selectOption({ label: 'General' });
     await createCard.getByLabel('Title').fill('John private title');
     await createCard.getByRole('button', { name: 'Create Request' }).click();
-    await expect(page.getByText('John private title')).toBeVisible();
+    await expect(page.getByTestId('form-overlay').getByText('John private title')).toBeVisible();
     const requestId = (await page.getByTestId('request-id').innerText()).replace('#', '').trim();
+    await page.getByTestId('close-form').click();
 
     let releaseStale = () => undefined;
     const released = new Promise<void>((resolve) => {
@@ -74,14 +86,13 @@ test.describe('Account login', () => {
       await route.continue();
     });
 
-    await page.getByLabel('Request ID').fill(requestId);
-    await page.getByRole('button', { name: 'Load Request' }).click();
+    await page.getByRole('button', { name: /John private title/ }).click();
     await expect(page.getByRole('heading', { name: 'Log in' })).toBeVisible();
     await expect(page.getByText('John private title')).toHaveCount(0);
     await expect(page.getByTestId('request-status')).toHaveCount(0);
 
     await page.getByLabel('Email').fill('chadi@operations-hub.test');
-    await page.getByLabel('Password').fill(TEST_PASSWORD);
+    await page.getByLabel('Password', { exact: true }).fill(TEST_PASSWORD);
     await page.getByRole('button', { name: 'Log in' }).click();
     await expect(page.getByTestId('signed-in-name')).toContainText('Chadi');
     await expect(page.getByText('John private title')).toHaveCount(0);

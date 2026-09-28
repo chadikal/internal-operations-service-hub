@@ -94,6 +94,7 @@ describe('request types and captured policy', () => {
     });
     const ids = extras.map((employee) => employee.id);
     if (ids.length > 0) {
+      await prisma.passwordReset.deleteMany({ where: { accountId: { in: ids } } });
       await prisma.emailVerification.deleteMany({ where: { accountId: { in: ids } } });
       await prisma.invitation.deleteMany({
         where: { OR: [{ accountId: { in: ids } }, { invitedById: { in: ids } }] },
@@ -331,5 +332,43 @@ describe('request types and captured policy', () => {
       .set(staffHeaders)
       .send({ approvalPolicy: 'SUPER_ADMIN' });
     expect(patchDenied.status).toBe(403);
+    const deleteDenied = await request(app.getHttpServer())
+      .delete(`/request-types/${type.id}`)
+      .set(staffHeaders);
+    expect(deleteDenied.status).toBe(403);
+  });
+
+  it('lets a Super Admin remove an unused request type and keeps one that has requests', async () => {
+    const stamp = Date.now();
+    const headers = await signupAndVerify(app, {
+      companyName: `Remove Type ${stamp}`,
+      name: 'Founder',
+      email: `remove.type.${stamp}@operations-hub.test`,
+    });
+    const it = (await request(app.getHttpServer()).get('/departments').set(headers)).body.find(
+      (row: { name: string }) => row.name === 'IT',
+    );
+    const spare = await createTestRequestType(app, headers, it.id, 'Spare', 'NONE');
+    const used = await createTestRequestType(app, headers, it.id, 'Used', 'NONE');
+    const founder = await prisma.employee.findUniqueOrThrow({
+      where: { email: `remove.type.${stamp}@operations-hub.test` },
+    });
+    const submitted = await request(app.getHttpServer()).post('/requests').set(headers).send({
+      submittedBy: founder.id,
+      departmentId: it.id,
+      requestTypeId: used.id,
+      title: 'Keep this type',
+    });
+    expect(submitted.status).toBe(201);
+
+    const removed = await request(app.getHttpServer()).delete(`/request-types/${spare.id}`).set(headers);
+    expect(removed.status).toBe(200);
+    expect(removed.body).toEqual({ deleted: true });
+    expect(await prisma.requestType.findUnique({ where: { id: spare.id } })).toBeNull();
+
+    const blocked = await request(app.getHttpServer()).delete(`/request-types/${used.id}`).set(headers);
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.message).toBe('A request type that is used by requests cannot be removed');
+    expect(await prisma.requestType.findUnique({ where: { id: used.id } })).not.toBeNull();
   });
 });

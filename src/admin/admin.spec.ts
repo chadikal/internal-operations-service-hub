@@ -1,5 +1,5 @@
 import { INestApplication } from '@nestjs/common';
-import { AccountRole, RequestStatus } from '@prisma/client';
+import { AccountRole, ApprovalPolicy, ApprovalState, RequestStatus } from '@prisma/client';
 import * as request from 'supertest';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailSender } from '../auth/email-sender';
@@ -113,6 +113,7 @@ describe('company Super Admin workspace', () => {
     });
     const ids = extras.map((employee) => employee.id);
     if (ids.length > 0) {
+      await prisma.passwordReset.deleteMany({ where: { accountId: { in: ids } } });
       await prisma.emailVerification.deleteMany({ where: { accountId: { in: ids } } });
       await prisma.invitation.deleteMany({
         where: { OR: [{ accountId: { in: ids } }, { invitedById: { in: ids } }] },
@@ -187,27 +188,205 @@ describe('company Super Admin workspace', () => {
     const dashboard = await request(app.getHttpServer()).get('/admin/dashboard').set(headersA);
     expect(dashboard.status).toBe(200);
     expect(dashboard.body).toEqual({
-      employees: 1,
+      people: { total: 1, admins: 1, handlers: 0, employees: 0 },
+      requests: { total: 3, submitted: 1, inProgress: 1, completed: 1, claimed: 0, unclaimed: 3, active: 2 },
+      approvals: { total: 0, awaiting: 0, approved: 0, denied: 0 },
       departments: 4,
-      requests: 3,
-      submitted: 1,
-      inProgress: 1,
-      completed: 1,
-      activeRequests: 2,
+      myRequests: {
+        total: 3,
+        submitted: 1,
+        completed: 1,
+        inProgress: 1,
+        unclaimed: 3,
+        awaitingApproval: 0,
+        approved: 0,
+        denied: 0,
+      },
     });
     assertNoSecrets(dashboard.body);
 
     const other = await request(app.getHttpServer()).get('/admin/dashboard').set(headersB);
     expect(other.status).toBe(200);
     expect(other.body).toEqual({
-      employees: 1,
+      people: { total: 1, admins: 1, handlers: 0, employees: 0 },
+      requests: { total: 1, submitted: 1, inProgress: 0, completed: 0, claimed: 0, unclaimed: 1, active: 1 },
+      approvals: { total: 0, awaiting: 0, approved: 0, denied: 0 },
       departments: 4,
-      requests: 1,
-      submitted: 1,
-      inProgress: 0,
-      completed: 0,
-      activeRequests: 1,
+      myRequests: {
+        total: 1,
+        submitted: 1,
+        completed: 0,
+        inProgress: 0,
+        unclaimed: 1,
+        awaitingApproval: 0,
+        approved: 0,
+        denied: 0,
+      },
     });
+    expect(JSON.stringify(dashboard.body)).not.toContain('Desk B');
+  });
+
+  it('counts approval separately from work status, including legacy rows, and overlaps admins with handlers', async () => {
+    const headers = await signupAndVerify(app, {
+      companyName: 'Overlap Co',
+      name: 'Founder Overlap',
+      email: 'overlap.founder@operations-hub.test',
+    });
+    const otherHeaders = await signupAndVerify(app, {
+      companyName: 'Overlap Other',
+      name: 'Other Founder',
+      email: 'overlap.other@operations-hub.test',
+    });
+    const founder = await prisma.employee.findUniqueOrThrow({
+      where: { email: 'overlap.founder@operations-hub.test' },
+    });
+    const other = await prisma.employee.findUniqueOrThrow({
+      where: { email: 'overlap.other@operations-hub.test' },
+    });
+    const department = await request(app.getHttpServer()).post('/departments').set(headers).send({ name: 'Overlap Desk' });
+    expect(department.status).toBe(201);
+    const otherDepartment = await request(app.getHttpServer())
+      .post('/departments')
+      .set(otherHeaders)
+      .send({ name: 'Other Desk' });
+    const handlerAdmin = await prisma.employee.create({
+      data: {
+        name: 'Handler Admin',
+        email: 'overlap.admin@operations-hub.test',
+        companyId: founder.companyId,
+        departmentId: department.body.id,
+        role: AccountRole.DEPARTMENT_ADMIN,
+        canHandle: true,
+        active: true,
+      },
+    });
+    await prisma.employee.create({
+      data: {
+        name: 'Handler Employee',
+        email: 'overlap.handler@operations-hub.test',
+        companyId: founder.companyId,
+        departmentId: department.body.id,
+        role: AccountRole.EMPLOYEE,
+        canHandle: true,
+        active: false,
+      },
+    });
+    await prisma.employee.create({
+      data: {
+        name: 'Plain Employee',
+        email: 'overlap.employee@operations-hub.test',
+        companyId: founder.companyId,
+        departmentId: department.body.id,
+        role: AccountRole.EMPLOYEE,
+        canHandle: false,
+        active: true,
+      },
+    });
+    const now = new Date();
+    const base = {
+      companyId: founder.companyId,
+      submittedBy: founder.id,
+      departmentId: department.body.id,
+      statusUpdatedAt: now,
+    };
+    await prisma.request.createMany({
+      data: [
+        {
+          ...base,
+          title: 'claimed-still-submitted',
+          approvalState: ApprovalState.PENDING,
+          capturedApprovalPolicy: ApprovalPolicy.DEPARTMENT_ADMIN,
+          currentOwnerId: handlerAdmin.id,
+          status: RequestStatus.SUBMITTED,
+        },
+        {
+          ...base,
+          title: 'legacy-awaiting',
+          approvalState: null,
+          capturedApprovalPolicy: ApprovalPolicy.DEPARTMENT_ADMIN,
+          currentOwnerId: null,
+          status: RequestStatus.IN_PROGRESS,
+        },
+        {
+          ...base,
+          title: 'approved-still-submitted',
+          approvalState: ApprovalState.APPROVED,
+          capturedApprovalPolicy: ApprovalPolicy.SUPER_ADMIN,
+          currentOwnerId: handlerAdmin.id,
+          status: RequestStatus.SUBMITTED,
+        },
+        {
+          ...base,
+          title: 'denied-completed',
+          approvalState: ApprovalState.DENIED,
+          capturedApprovalPolicy: ApprovalPolicy.DEPARTMENT_ADMIN,
+          currentOwnerId: null,
+          status: RequestStatus.COMPLETED,
+        },
+        {
+          ...base,
+          title: 'not-required',
+          approvalState: ApprovalState.NOT_REQUIRED,
+          capturedApprovalPolicy: ApprovalPolicy.NONE,
+          currentOwnerId: null,
+          status: RequestStatus.SUBMITTED,
+        },
+        {
+          ...base,
+          title: 'legacy-none',
+          approvalState: null,
+          capturedApprovalPolicy: null,
+          currentOwnerId: null,
+          status: RequestStatus.SUBMITTED,
+        },
+        {
+          ...base,
+          title: 'none-but-pending',
+          approvalState: ApprovalState.PENDING,
+          capturedApprovalPolicy: ApprovalPolicy.NONE,
+          currentOwnerId: null,
+          status: RequestStatus.SUBMITTED,
+        },
+      ],
+    });
+    await prisma.request.create({
+      data: {
+        companyId: other.companyId,
+        submittedBy: other.id,
+        departmentId: otherDepartment.body.id,
+        approvalState: ApprovalState.PENDING,
+        capturedApprovalPolicy: ApprovalPolicy.SUPER_ADMIN,
+        status: RequestStatus.SUBMITTED,
+        statusUpdatedAt: now,
+        title: 'OTHER-COMPANY-PENDING',
+      },
+    });
+
+    const dashboard = await request(app.getHttpServer()).get('/admin/dashboard').set(headers);
+    expect(dashboard.status).toBe(200);
+    expect(dashboard.body.people).toEqual({ total: 4, admins: 2, handlers: 2, employees: 2 });
+    expect(dashboard.body.people.admins + dashboard.body.people.employees).toBe(dashboard.body.people.total);
+    expect(dashboard.body.requests).toEqual({
+      total: 7,
+      submitted: 5,
+      inProgress: 1,
+      completed: 1,
+      claimed: 2,
+      unclaimed: 5,
+      active: 6,
+    });
+    expect(dashboard.body.approvals).toEqual({ total: 0, awaiting: 0, approved: 0, denied: 0 });
+    expect(dashboard.body.myRequests).toEqual({
+      total: 7,
+      submitted: 5,
+      completed: 1,
+      inProgress: 1,
+      unclaimed: 5,
+      awaitingApproval: 2,
+      approved: 1,
+      denied: 1,
+    });
+    expect(JSON.stringify(dashboard.body)).not.toContain('OTHER-COMPANY-PENDING');
   });
 
   it('lists employees with combinable filters and never returns secrets or another company', async () => {
@@ -310,13 +489,24 @@ describe('company Super Admin workspace', () => {
     expect(filtered.body[0].role).toBe('DEPARTMENT_ADMIN');
     expect(filtered.body[0].canHandle).toBe(true);
 
+    const admins = await request(app.getHttpServer()).get('/admin/employees').query({ role: 'ADMIN' }).set(headersA);
+    expect(admins.status).toBe(200);
+    const adminRoles = admins.body.map((row: EmployeeRow) => row.role);
+    expect(adminRoles).toContain('SUPER_ADMIN');
+    expect(adminRoles).toContain('DEPARTMENT_ADMIN');
+    expect(adminRoles).not.toContain('EMPLOYEE');
+    expect(admins.body.map((row: EmployeeRow) => row.email)).toEqual(
+      expect.arrayContaining(['ada.admin@operations-hub.test', 'pat.handler@operations-hub.test', 'quinn.viewer@operations-hub.test']),
+    );
+
     const inactiveAdmins = await request(app.getHttpServer()).get('/admin/employees').query({
       role: 'DEPARTMENT_ADMIN',
-      canHandle: 'false',
+      canHandle: 'true',
       active: 'false',
       departmentId: String(desk.body.id),
     }).set(headersA);
     expect(inactiveAdmins.body.map((row: EmployeeRow) => row.email)).toEqual(['quinn.viewer@operations-hub.test']);
+    expect(inactiveAdmins.body[0].canHandle).toBe(true);
 
     const searchEmail = await request(app.getHttpServer())
       .get('/admin/employees')
@@ -688,5 +878,233 @@ describe('company Super Admin workspace', () => {
     expect(page1Ids).not.toEqual(page2Ids);
     expect([...page1Ids, ...page2Ids].length).toBe(new Set([...page1Ids, ...page2Ids]).size);
     expect(page1.body.items[0].id).toBeGreaterThan(page1.body.items[1].id);
+  });
+
+  it('lets Super Admin edit and deactivate staff and keeps Department Admin inside their department', async () => {
+    const stamp = Date.now();
+    const headers = await signupAndVerify(app, {
+      companyName: `Staff Co ${stamp}`,
+      name: 'Staff Founder',
+      email: `staff.founder.${stamp}@operations-hub.test`,
+    });
+    const otherHeaders = await signupAndVerify(app, {
+      companyName: `Staff Other ${stamp}`,
+      name: 'Other Founder',
+      email: `staff.other.${stamp}@operations-hub.test`,
+    });
+    const departments = await request(app.getHttpServer()).get('/departments').set(headers);
+    const it = departments.body.find((department: { name: string }) => department.name === 'IT');
+    const hr = departments.body.find((department: { name: string }) => department.name === 'HR');
+    const foreignDepartments = await request(app.getHttpServer()).get('/departments').set(otherHeaders);
+    const foreignIt = foreignDepartments.body.find((department: { name: string }) => department.name === 'IT');
+
+    const invited = await request(app.getHttpServer()).post('/auth/invitations').set(headers).send({
+      email: `sam.staff.${stamp}@operations-hub.test`,
+      name: 'Sam Staff',
+      departmentId: it.id,
+      role: 'EMPLOYEE',
+      canHandle: false,
+    });
+    expect(invited.status).toBe(201);
+    const adminInvite = await request(app.getHttpServer()).post('/auth/invitations').set(headers).send({
+      email: `dana.admin.${stamp}@operations-hub.test`,
+      name: 'Dana Admin',
+      departmentId: it.id,
+      role: 'DEPARTMENT_ADMIN',
+      canHandle: false,
+    });
+    expect(adminInvite.status).toBe(201);
+    expect(adminInvite.body.canHandle).toBe(true);
+    const hrInvite = await request(app.getHttpServer()).post('/auth/invitations').set(headers).send({
+      email: `hr.person.${stamp}@operations-hub.test`,
+      name: 'HR Person',
+      departmentId: hr.id,
+      role: 'EMPLOYEE',
+      canHandle: true,
+    });
+    expect(hrInvite.status).toBe(201);
+
+    const edited = await request(app.getHttpServer())
+      .patch(`/admin/employees/${invited.body.id}`)
+      .set(headers)
+      .send({ name: 'Sam Handler', departmentId: hr.id, canHandle: true, role: 'EMPLOYEE' });
+    expect(edited.status).toBe(200);
+    expect(edited.body).toMatchObject({
+      id: invited.body.id,
+      name: 'Sam Handler',
+      role: 'EMPLOYEE',
+      canHandle: true,
+      active: false,
+      department: { id: hr.id, name: 'HR' },
+    });
+    expect(JSON.stringify(edited.body)).not.toContain('passwordHash');
+
+    const promoted = await request(app.getHttpServer())
+      .patch(`/admin/employees/${invited.body.id}`)
+      .set(headers)
+      .send({ role: 'DEPARTMENT_ADMIN', departmentId: hr.id, canHandle: false });
+    expect(promoted.status).toBe(200);
+    expect(promoted.body.role).toBe('DEPARTMENT_ADMIN');
+    expect(promoted.body.canHandle).toBe(true);
+
+    const founder = await prisma.employee.findUniqueOrThrow({
+      where: { email: `staff.founder.${stamp}@operations-hub.test` },
+    });
+    const selfRemove = await request(app.getHttpServer())
+      .post(`/admin/employees/${founder.id}/deactivate`)
+      .set(headers);
+    expect(selfRemove.status).toBe(403);
+
+    const removedAdmin = await request(app.getHttpServer())
+      .post(`/admin/employees/${adminInvite.body.id}/deactivate`)
+      .set(headers);
+    expect(removedAdmin.status).toBe(200);
+    expect(removedAdmin.body.active).toBe(false);
+    const kept = await prisma.employee.findUniqueOrThrow({ where: { id: adminInvite.body.id } });
+    expect(kept.active).toBe(false);
+    expect(kept.email).toBe(`dana.admin.${stamp}@operations-hub.test`);
+
+    const foreignEdit = await request(app.getHttpServer())
+      .patch(`/admin/employees/${invited.body.id}`)
+      .set(otherHeaders)
+      .send({ name: 'Stolen' });
+    expect(foreignEdit.status).toBe(400);
+    expect(JSON.stringify(foreignEdit.body)).not.toContain('Sam');
+    expect((await prisma.employee.findUnique({ where: { id: invited.body.id } }))?.name).toBe('Sam Handler');
+
+    const acceptToken = await outboxToken(app, `dana.admin.${stamp}@operations-hub.test`, 'invitation');
+    expect(
+      (
+        await request(app.getHttpServer())
+          .post('/auth/invitations/accept')
+          .set('Origin', TEST_ORIGIN)
+          .send({ token: acceptToken, password: PASSWORD })
+      ).status,
+    ).toBe(400);
+
+    const hrToken = await outboxToken(app, `hr.person.${stamp}@operations-hub.test`, 'invitation');
+    expect(
+      (
+        await request(app.getHttpServer())
+          .post('/auth/invitations/accept')
+          .set('Origin', TEST_ORIGIN)
+          .send({ token: hrToken, password: PASSWORD })
+      ).status,
+    ).toBe(200);
+    const hrHeaders = await loginHeaders(app, `hr.person.${stamp}@operations-hub.test`, PASSWORD);
+    const hrAccount = await prisma.employee.findUniqueOrThrow({
+      where: { email: `hr.person.${stamp}@operations-hub.test` },
+    });
+    await prisma.employee.update({
+      where: { id: hrAccount.id },
+      data: { role: 'DEPARTMENT_ADMIN', canHandle: false },
+    });
+    const daHeaders = await loginHeaders(app, `hr.person.${stamp}@operations-hub.test`, PASSWORD);
+
+    const peer = await request(app.getHttpServer()).post('/auth/invitations').set(daHeaders).send({
+      email: `hr.peer.${stamp}@operations-hub.test`,
+      name: 'HR Peer',
+      departmentId: hr.id,
+      role: 'EMPLOYEE',
+      canHandle: true,
+    });
+    expect(peer.status).toBe(201);
+    const wrongDepartment = await request(app.getHttpServer()).post('/auth/invitations').set(daHeaders).send({
+      email: `it.sneak.${stamp}@operations-hub.test`,
+      name: 'IT Sneak',
+      departmentId: it.id,
+      role: 'EMPLOYEE',
+      canHandle: false,
+    });
+    expect(wrongDepartment.status).toBe(403);
+    const promote = await request(app.getHttpServer()).post('/auth/invitations').set(daHeaders).send({
+      email: `hr.boss.${stamp}@operations-hub.test`,
+      name: 'HR Boss',
+      departmentId: hr.id,
+      role: 'DEPARTMENT_ADMIN',
+      canHandle: false,
+    });
+    expect(promote.status).toBe(403);
+    const foreignInvite = await request(app.getHttpServer()).post('/auth/invitations').set(daHeaders).send({
+      email: `foreign.sneak.${stamp}@operations-hub.test`,
+      name: 'Foreign',
+      departmentId: foreignIt.id,
+      role: 'EMPLOYEE',
+      canHandle: false,
+    });
+    expect(foreignInvite.status).toBe(400);
+    expect(JSON.stringify(foreignInvite.body)).not.toContain('Other Founder');
+
+    const peerToken = await outboxToken(app, `hr.peer.${stamp}@operations-hub.test`, 'invitation');
+    expect(
+      (
+        await request(app.getHttpServer())
+          .post('/auth/invitations/accept')
+          .set('Origin', TEST_ORIGIN)
+          .send({ token: peerToken, password: PASSWORD })
+      ).status,
+    ).toBe(200);
+    const peerAccount = await prisma.employee.findUniqueOrThrow({
+      where: { email: `hr.peer.${stamp}@operations-hub.test` },
+    });
+    const type = await request(app.getHttpServer())
+      .post(`/departments/${hr.id}/request-types`)
+      .set(headers)
+      .send({ name: 'Desk', approvalPolicy: 'NONE' });
+    const submitted = await request(app.getHttpServer()).post('/requests').set(daHeaders).send({
+      submittedBy: hrAccount.id,
+      departmentId: hr.id,
+      requestTypeId: type.body.id,
+      title: 'Keep this history',
+    });
+    expect(submitted.status).toBe(201);
+    await prisma.request.update({
+      where: { id: submitted.body.id },
+      data: { currentOwnerId: peerAccount.id, status: RequestStatus.IN_PROGRESS },
+    });
+    const blocked = await request(app.getHttpServer())
+      .post(`/department/employees/${peerAccount.id}/deactivate`)
+      .set(daHeaders);
+    expect(blocked.status).toBe(409);
+    await prisma.request.update({
+      where: { id: submitted.body.id },
+      data: { status: RequestStatus.COMPLETED },
+    });
+    const renamed = await request(app.getHttpServer())
+      .patch(`/department/employees/${peerAccount.id}`)
+      .set(daHeaders)
+      .send({ name: 'HR Colleague', canHandle: false });
+    expect(renamed.status).toBe(200);
+    expect(renamed.body).toMatchObject({ name: 'HR Colleague', role: 'EMPLOYEE', canHandle: false, department: { id: hr.id } });
+    const move = await request(app.getHttpServer())
+      .patch(`/department/employees/${peerAccount.id}`)
+      .set(daHeaders)
+      .send({ role: 'DEPARTMENT_ADMIN' });
+    expect(move.status).toBe(400);
+    const otherAdmin = await request(app.getHttpServer())
+      .patch(`/department/employees/${adminInvite.body.id}`)
+      .set(daHeaders)
+      .send({ name: 'Taken' });
+    expect(otherAdmin.status).toBe(403);
+    const founderEdit = await request(app.getHttpServer())
+      .patch(`/department/employees/${founder.id}`)
+      .set(daHeaders)
+      .send({ name: 'Taken' });
+    expect(founderEdit.status).toBe(403);
+    const removed = await request(app.getHttpServer())
+      .post(`/department/employees/${peerAccount.id}/deactivate`)
+      .set(daHeaders);
+    expect(removed.status).toBe(200);
+    expect(removed.body.active).toBe(false);
+    const history = await prisma.request.findUniqueOrThrow({ where: { id: submitted.body.id } });
+    expect(history.title).toBe('Keep this history');
+    expect(history.currentOwnerId).toBe(peerAccount.id);
+    expect((await prisma.employee.findUnique({ where: { id: peerAccount.id } }))?.active).toBe(false);
+    const peerLogin = await request(app.getHttpServer())
+      .post('/auth/login')
+      .set('Origin', TEST_ORIGIN)
+      .send({ email: `hr.peer.${stamp}@operations-hub.test`, password: PASSWORD });
+    expect(peerLogin.status).toBe(401);
+    expect(hrHeaders.Cookie).toBeTruthy();
   });
 });

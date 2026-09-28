@@ -41,6 +41,36 @@ function loginCredential({ obj, key }: { obj: unknown; key: string }): unknown {
  * lowercased here, then accepted only if normalizeEmail accepts it in the
  * service. Duplicate email and an unknown department are service results.
  */
+export class UpdateProfileDto {
+  @Transform(trimmedString)
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  name!: string;
+}
+
+export class ChangePasswordDto {
+  @IsString()
+  @MinLength(1)
+  currentPassword!: string;
+
+  @IsString()
+  @MinLength(12)
+  newPassword!: string;
+
+  @IsString()
+  @MinLength(1)
+  confirmPassword!: string;
+}
+
+export class UpdateCompanyDto {
+  @Transform(trimmedString)
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  name!: string;
+}
+
 export class LoginDto {
   @Transform(loginCredential)
   @IsOptional()
@@ -84,6 +114,25 @@ export class SignupCompanyDto {
   @IsString()
   @MinLength(12)
   password!: string;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => SignupDepartmentDto)
+  departments?: SignupDepartmentDto[];
+}
+
+export class SignupDepartmentDto {
+  @Transform(trimmedString)
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  name!: string;
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ConfirmedRequestTypeDto)
+  requestTypes!: ConfirmedRequestTypeDto[];
 }
 
 export class OpaqueTokenDto {
@@ -91,6 +140,25 @@ export class OpaqueTokenDto {
   @MinLength(20)
   @MaxLength(200)
   token!: string;
+}
+
+export class ForgotPasswordDto {
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toLowerCase() : value))
+  @IsString()
+  @MinLength(1)
+  @MaxLength(254)
+  email!: string;
+}
+
+export class ResetPasswordDto {
+  @IsString()
+  @MinLength(20)
+  @MaxLength(200)
+  token!: string;
+
+  @IsString()
+  @MinLength(12)
+  password!: string;
 }
 
 export class AcceptInvitationDto {

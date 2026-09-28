@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   HttpCode,
+  Patch,
   Post,
   Req,
   Res,
@@ -13,10 +14,15 @@ import { Public, RecordsActivity } from './auth.decorators';
 import { AuthService } from './auth.service';
 import {
   AcceptInvitationDto,
+  ChangePasswordDto,
+  ForgotPasswordDto,
   InviteStaffDto,
   LoginDto,
   OpaqueTokenDto,
+  ResetPasswordDto,
   SignupCompanyDto,
+  UpdateCompanyDto,
+  UpdateProfileDto,
 } from './dto/auth.dto';
 import { assertTrustedOrigin } from './origin';
 import { AuthenticatedRequest } from './session.guard';
@@ -72,6 +78,22 @@ export class AuthController {
     };
   }
 
+  @Patch('me')
+  updateProfile(@Req() request: AuthenticatedRequest, @Body() dto: UpdateProfileDto) {
+    return this.authService.updateProfile(request.auth!, dto.name);
+  }
+
+  @Post('change-password')
+  @HttpCode(200)
+  changePassword(@Req() request: AuthenticatedRequest, @Body() dto: ChangePasswordDto) {
+    return this.authService.changePassword(request.auth!, dto);
+  }
+
+  @Patch('company')
+  updateCompany(@Req() request: AuthenticatedRequest, @Body() dto: UpdateCompanyDto) {
+    return this.authService.updateCompany(request.auth!, dto.name);
+  }
+
   @Public()
   @Post('signup')
   signup(@Req() request: AuthenticatedRequest, @Body() dto: SignupCompanyDto) {
@@ -85,6 +107,22 @@ export class AuthController {
   verifyEmail(@Req() request: AuthenticatedRequest, @Body() dto: OpaqueTokenDto) {
     assertTrustedOrigin(request.header('origin'));
     return this.authService.verifyEmail(dto.token);
+  }
+
+  @Public()
+  @Post('forgot-password')
+  @HttpCode(200)
+  forgotPassword(@Req() request: AuthenticatedRequest, @Body() dto: ForgotPasswordDto) {
+    assertTrustedOrigin(request.header('origin'));
+    return this.authService.requestPasswordReset(dto.email);
+  }
+
+  @Public()
+  @Post('reset-password')
+  @HttpCode(200)
+  resetPassword(@Req() request: AuthenticatedRequest, @Body() dto: ResetPasswordDto) {
+    assertTrustedOrigin(request.header('origin'));
+    return this.authService.resetPassword(dto.token, dto.password);
   }
 
   @Public()

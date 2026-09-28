@@ -34,10 +34,10 @@ export function TemplateSuggestionEditor({
 }) {
   return (
     <div className="type-block" data-testid={`template-suggestions-for-${scope}`}>
-      <p className="muted">Suggested request types for {scope}</p>
+      <p className="muted">Suggested request types</p>
       {drafts.length === 0 ? <p className="muted">No suggested types in this review.</p> : null}
       {drafts.map((draft, index) => (
-        <div className="actions" key={draft.key}>
+        <div className="suggestion-row" key={draft.key}>
           <label>
             Suggested type name {index + 1} for {scope}
             <input
@@ -71,16 +71,18 @@ export function TemplateSuggestionEditor({
             </select>
           </label>
           <button
-            className="btn-secondary"
+            className="icon-button"
             type="button"
+            aria-label={`Remove ${draft.name.trim() || 'suggested type'}`}
+            title={`Remove ${draft.name.trim() || 'suggested type'}`}
             onClick={() => onChange(drafts.filter((item) => item.key !== draft.key))}
           >
-            Remove suggested type {index + 1} for {scope}
+            <MinusIcon />
           </button>
         </div>
       ))}
       <button
-        className="btn-secondary"
+        className="btn-secondary icon-label"
         type="button"
         onClick={() =>
           onChange([
@@ -89,9 +91,25 @@ export function TemplateSuggestionEditor({
           ])
         }
       >
-        Add a suggested type for {scope}
+        <PlusIcon /> Add type
       </button>
     </div>
+  );
+}
+
+export function PlusIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+      <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function MinusIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+      <path d="M5 12h14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
   );
 }
 

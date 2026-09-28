@@ -100,6 +100,7 @@ describe('department templates', () => {
     });
     const ids = extras.map((employee) => employee.id);
     if (ids.length > 0) {
+      await prisma.passwordReset.deleteMany({ where: { accountId: { in: ids } } });
       await prisma.emailVerification.deleteMany({ where: { accountId: { in: ids } } });
       await prisma.invitation.deleteMany({
         where: { OR: [{ accountId: { in: ids } }, { invitedById: { in: ids } }] },

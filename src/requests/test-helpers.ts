@@ -191,6 +191,7 @@ export async function removeNonDevelopmentCompanies(prisma: PrismaService) {
   }
   await prisma.emailVerification.deleteMany({ where: { companyId: { in: companyIds } } });
   await prisma.invitation.deleteMany({ where: { companyId: { in: companyIds } } });
+  await prisma.passwordReset.deleteMany({ where: { companyId: { in: companyIds } } });
   await prisma.session.deleteMany({ where: { companyId: { in: companyIds } } });
   await prisma.requestStatusHistory.deleteMany({ where: { companyId: { in: companyIds } } });
   await prisma.approvalDecision.deleteMany({ where: { companyId: { in: companyIds } } });

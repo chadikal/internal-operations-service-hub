@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "start": "nest start",
-    "start:dev": "nest start --watch",
+    "start:dev": "node scripts/start-dev.cjs",
     "build": "nest build",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "prisma db seed",

@@ -2,6 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import { AccountRole, ApprovalState, RequestStatus } from '@prisma/client';
 import * as request from 'supertest';
 import { hashPassword } from '../auth/password';
+import { buildStatusTimeline } from './status-timeline';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   authHeaders,
@@ -62,6 +63,18 @@ describe('Handler self-claim', () => {
     await closeTestApp(app);
   });
 
+  it('lets a Department Admin claim without a separate handler flag', async () => {
+    await prisma.employee.update({
+      where: { id: CHADI },
+      data: { role: AccountRole.DEPARTMENT_ADMIN, canHandle: false, departmentId: IT, active: true },
+    });
+    const created = await submit(JOHN, IT, IT_TYPE);
+    const claimed = await claim(CHADI, created.body.id);
+    expect(claimed.status).toBe(201);
+    expect(claimed.body.currentOwnerId).toBe(CHADI);
+    expect(claimed.body.status).toBe('SUBMITTED');
+  });
+
   it('lets an eligible handler claim an unassigned request and start it later', async () => {
     const created = await submit(JOHN, IT, IT_TYPE);
     const claimed = await claim(CHADI, created.body.id);
@@ -69,6 +82,8 @@ describe('Handler self-claim', () => {
     expect(claimed.body.currentOwnerId).toBe(CHADI);
     expect(claimed.body.status).toBe('SUBMITTED');
     expect(claimed.body.approvalState).toBe('NOT_REQUIRED');
+    expect(claimed.body.claimedAt).toEqual(expect.any(String));
+    expect(Math.abs(Date.now() - new Date(claimed.body.claimedAt).getTime())).toBeLessThan(60_000);
     expect(await prisma.requestStatusHistory.count({ where: { requestId: created.body.id } })).toBe(0);
 
     const started = await request(app.getHttpServer())
@@ -78,6 +93,44 @@ describe('Handler self-claim', () => {
     expect(started.status).toBe(200);
     expect(started.body.status).toBe('IN_PROGRESS');
     expect(started.body.currentOwnerId).toBe(CHADI);
+    expect(started.body.claimedAt).toBe(claimed.body.claimedAt);
+
+    const stored = await prisma.request.findUniqueOrThrow({ where: { id: created.body.id } });
+    expect(stored.claimedAt).not.toBeNull();
+    const reloaded = await request(app.getHttpServer())
+      .get(`/requests/${created.body.id}`)
+      .set(await authHeaders(app, prisma, CHADI));
+    expect(reloaded.status).toBe(200);
+    expect(reloaded.body.claimedAt).toBe(claimed.body.claimedAt);
+    expect(reloaded.body.status).toBe('IN_PROGRESS');
+    const claimedStep = buildStatusTimeline(reloaded.body, [
+      {
+        newStatus: 'IN_PROGRESS',
+        changedAt: started.body.statusUpdatedAt,
+        changedByEmployee: { name: reloaded.body.currentOwner.name },
+      },
+    ]).find((step) => step.label === 'Claimed');
+    expect(claimedStep?.detail).toBe(
+      `by ${reloaded.body.currentOwner.name} · ${new Date(reloaded.body.claimedAt).toLocaleString()}`,
+    );
+  });
+
+  it('leaves claimedAt null when an older row has an owner but no claim time', async () => {
+    const created = await submit(JOHN, IT, IT_TYPE);
+    await prisma.request.update({
+      where: { id: created.body.id },
+      data: { currentOwnerId: CHADI },
+    });
+    const loaded = await request(app.getHttpServer())
+      .get(`/requests/${created.body.id}`)
+      .set(await authHeaders(app, prisma, CHADI));
+    expect(loaded.status).toBe(200);
+    expect(loaded.body.currentOwnerId).toBe(CHADI);
+    expect(loaded.body.claimedAt).toBeNull();
+    const stored = await prisma.request.findUniqueOrThrow({ where: { id: created.body.id } });
+    expect(stored.claimedAt).toBeNull();
+    const claimedStep = buildStatusTimeline(loaded.body, []).find((step) => step.label === 'Claimed');
+    expect(claimedStep?.detail).toBe(`by ${loaded.body.currentOwner.name}`);
   });
 
   it('rejects the submitter, another department, a pending or denied request, and a second claim', async () => {

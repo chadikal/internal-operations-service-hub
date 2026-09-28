@@ -15,34 +15,64 @@ import {
   IntakeResult,
   login,
   logout,
+  requestPasswordReset,
+  resetPassword,
   RequestType,
   ServiceRequest,
   SessionUser,
   StaleSessionResult,
   beginClientSession,
+  endClientSession,
   currentSessionGeneration,
   signupCompany,
+  inviteStaff,
   transition,
   verifyEmail,
   acceptInvitation,
 } from './api';
+import { PendingInvite, savePendingInvites, takePendingInvites } from './pending-invites';
 import {
   AdminShell,
-  ComingLaterPage,
   DashboardPage,
   DepartmentsPage,
   EmployeesPage,
+  workspaceRoleLabel,
 } from './admin';
+import { canActAsHandler, storedCanHandle } from './roles';
+import { AccountSettings } from './account-settings';
 import { AdminRequestsPage } from './admin-requests';
 import { ApprovalInbox } from './approvals';
 import {
   AcceptInviteForm,
   CheckEmail,
+  ForgotPasswordForm,
+  ResetPasswordForm,
   SignupForm,
   VerifyEmailForm,
 } from './onboarding';
+import { PasswordField } from './password-field';
+import { FormOverlay } from './form-overlay';
 import { chooseIntakeStep, hasMissingRequiredInformation, IntakeStep, RequestWorkspace } from './request-workspace';
-import { AdminView, adminPath, isAdminPath, parseAdminView } from './routing';
+import { AdminView, adminPath, isAdminPath, parseAdminView, parseStaffView, staffPath, StaffView } from './routing';
+import { DepartmentEmployeesPage, MyRequestsPage, StaffDashboard, StaffRequestList } from './staff';
+
+function formFromLocation(): 'create' | 'intake' | null {
+  const path = window.location.pathname.replace(/\/+$/, '') || '/';
+  if (path === '/requests/new') return 'create';
+  if (path === '/requests/intake') return 'intake';
+  const value = new URLSearchParams(window.location.search).get('form');
+  if (value === 'create' || value === 'intake') return value;
+  return null;
+}
+
+function rewriteLegacyComposePath() {
+  const path = window.location.pathname.replace(/\/+$/, '') || '/';
+  if (path === '/requests/new') {
+    window.history.replaceState({}, '', '/my-requests?form=create');
+  } else if (path === '/requests/intake') {
+    window.history.replaceState({}, '', '/my-requests?form=intake');
+  }
+}
 
 function viewFromLocation(role: string | undefined): AdminView | 'home' {
   if (role !== 'SUPER_ADMIN') {
@@ -57,7 +87,10 @@ function firstRequestTypeId(types: RequestType[], departmentId: string): string 
 }
 
 function syncUrl(role: string | undefined, view: AdminView | 'home') {
-  const next = role === 'SUPER_ADMIN' && view !== 'home' ? adminPath(view) : '/';
+  if (role !== 'SUPER_ADMIN') {
+    return;
+  }
+  const next = view !== 'home' ? adminPath(view) : '/';
   if (window.location.pathname !== next) {
     window.history.replaceState({}, '', next);
   }
@@ -74,7 +107,6 @@ export default function App() {
   const [requestTypeId, setRequestTypeId] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [loadId, setLoadId] = useState('');
   const [request, setRequest] = useState<ServiceRequest | null>(null);
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [error, setError] = useState('');
@@ -82,12 +114,16 @@ export default function App() {
   const [intakeText, setIntakeText] = useState('');
   const [intakeResult, setIntakeResult] = useState<IntakeResult | null>(null);
   const [intakeStep, setIntakeStep] = useState<IntakeStep>('input');
-  const [gate, setGate] = useState<'login' | 'signup' | 'check-email'>('login');
+  const [gate, setGate] = useState<'login' | 'signup' | 'check-email' | 'forgot' | 'reset-sent'>('login');
   const [pendingEmail, setPendingEmail] = useState('');
+  const [notice, setNotice] = useState('');
   const [verifyToken, setVerifyToken] = useState(() => new URLSearchParams(window.location.search).get('verify'));
   const [inviteToken, setInviteToken] = useState(() => new URLSearchParams(window.location.search).get('invite'));
+  const [resetToken, setResetToken] = useState(() => new URLSearchParams(window.location.search).get('reset'));
   const [view, setView] = useState<AdminView | 'home'>(() => viewFromLocation(undefined));
+  const [staffView, setStaffView] = useState<StaffView>(() => parseStaffView(window.location.pathname));
   const [urlSearch, setUrlSearch] = useState(() => window.location.search);
+  const [formMode, setFormMode] = useState<'create' | 'intake' | null>(() => formFromLocation());
 
   const canSubmitRequest = user !== null && departmentId !== '' && requestTypeId !== '';
 
@@ -98,7 +134,6 @@ export default function App() {
     setRequestTypeId('');
     setTitle('');
     setDescription('');
-    setLoadId('');
     setRequest(null);
     setHistory([]);
     setEmail('');
@@ -112,20 +147,88 @@ export default function App() {
     setUser(null);
     resetWorkspaceData();
     setView('home');
+    setFormMode(null);
     syncUrl(undefined, 'home');
   }
 
-  function applySession(session: SessionUser) {
+  async function sendPreparedInvites(session: SessionUser) {
+    if (session.role !== 'SUPER_ADMIN' || !session.email) return;
+    const email = session.email;
+    const pending = takePendingInvites(email);
+    if (pending.length === 0) return;
+    try {
+      const departments = await getDepartments();
+      const failed: PendingInvite[] = [];
+      for (const invite of pending) {
+        const department = departments.find(
+          (item) => item.name.toLowerCase() === invite.departmentName.toLowerCase(),
+        );
+        if (!department) {
+          failed.push(invite);
+          continue;
+        }
+        try {
+          await inviteStaff({
+            name: invite.name,
+            email: invite.email,
+            departmentId: department.id,
+            role: invite.role,
+            canHandle: storedCanHandle(invite.role, invite.canHandle),
+          });
+        } catch (error) {
+          if (error instanceof StaleSessionResult || (error instanceof ApiError && error.status === 401)) {
+            failed.push(invite);
+            break;
+          }
+          failed.push(invite);
+        }
+      }
+      if (failed.length > 0) savePendingInvites(email, failed);
+    } catch {
+      savePendingInvites(email, pending);
+    }
+  }
+
+  function applySession(session: SessionUser, options?: { dashboard?: boolean }) {
     beginClientSession(session);
     resetWorkspaceData();
     setUser(session);
+    void sendPreparedInvites(session);
+    if (options?.dashboard) {
+      setFormMode(null);
+      setUrlSearch('');
+      if (session.role === 'SUPER_ADMIN') {
+        setView('dashboard');
+        setStaffView('dashboard');
+        window.history.replaceState({}, '', adminPath('dashboard'));
+      } else {
+        setView('home');
+        setStaffView('dashboard');
+        window.history.replaceState({}, '', '/');
+      }
+      return currentSessionGeneration();
+    }
     const nextView = viewFromLocation(session.role);
     setView(nextView);
+    if (session.role !== 'SUPER_ADMIN') {
+      if (!isAdminPath(window.location.pathname)) {
+        rewriteLegacyComposePath();
+      }
+      const nextStaff = isAdminPath(window.location.pathname) ? 'dashboard' : parseStaffView(window.location.pathname);
+      setStaffView(nextStaff);
+      const path = staffPath(nextStaff);
+      if (window.location.pathname !== path) {
+        window.history.replaceState({}, '', path);
+      }
+    }
+    setFormMode(formFromLocation());
     syncUrl(session.role, nextView);
     return currentSessionGeneration();
   }
 
   function goTo(next: AdminView, query?: Record<string, string>) {
+    const keepsForm = next === 'my-requests' && (query?.form === 'create' || query?.form === 'intake');
+    if (!keepsForm) setFormMode(null);
     setView(next);
     const path = adminPath(next, query);
     const current = `${window.location.pathname}${window.location.search}`;
@@ -138,7 +241,9 @@ export default function App() {
   useEffect(() => {
     function onPopState() {
       setView(viewFromLocation(user?.role));
+      setStaffView(parseStaffView(window.location.pathname));
       setUrlSearch(window.location.search);
+      setFormMode(formFromLocation());
     }
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
@@ -150,12 +255,13 @@ export default function App() {
     }
     if (user && user.role !== 'SUPER_ADMIN' && isAdminPath(window.location.pathname)) {
       setView('home');
-      syncUrl(user.role, 'home');
+      setStaffView('dashboard');
+      window.history.replaceState({}, '', '/');
     }
   }, [user, view]);
 
   useEffect(() => {
-    if (!user || view !== 'requests') {
+    if (!user || (view !== 'requests' && formMode === null)) {
       return;
     }
     const generation = currentSessionGeneration();
@@ -166,27 +272,29 @@ export default function App() {
         }
         setDepartments(nextDepartments);
         setRequestTypes(nextTypes);
-        const nextDepartmentId =
-          departmentId && nextDepartments.some((department) => String(department.id) === departmentId)
-            ? departmentId
-            : nextDepartments[0]
-              ? String(nextDepartments[0].id)
-              : '';
-        setDepartmentId(nextDepartmentId);
-        setRequestTypeId((current) => {
-          if (
-            current &&
-            nextTypes.some(
-              (item) => String(item.id) === current && String(item.departmentId) === nextDepartmentId,
-            )
-          ) {
-            return current;
-          }
-          return firstRequestTypeId(nextTypes, nextDepartmentId);
+        setDepartmentId((current) => {
+          const nextDepartmentId =
+            current && nextDepartments.some((department) => String(department.id) === current)
+              ? current
+              : nextDepartments[0]
+                ? String(nextDepartments[0].id)
+                : '';
+          setRequestTypeId((typeId) => {
+            if (
+              typeId &&
+              nextTypes.some(
+                (item) => String(item.id) === typeId && String(item.departmentId) === nextDepartmentId,
+              )
+            ) {
+              return typeId;
+            }
+            return firstRequestTypeId(nextTypes, nextDepartmentId);
+          });
+          return nextDepartmentId;
         });
       },
     );
-  }, [user, view]);
+  }, [user, view, formMode]);
 
   useEffect(() => {
     const generation = currentSessionGeneration();
@@ -306,22 +414,8 @@ export default function App() {
     void run(submitCreate);
   }
 
-  function onLoad(event: FormEvent) {
-    event.preventDefault();
-    if (user === null) return;
-    void run(async () => {
-      try {
-        await refresh(Number(loadId));
-      } catch (err) {
-        setRequest(null);
-        setHistory([]);
-        throw err;
-      }
-    });
-  }
-
   function onClaim() {
-    if (!request || !user || user.canHandle !== true || user.role === 'SUPER_ADMIN') return;
+    if (!request || !user || !canActAsHandler(user.role, user.canHandle)) return;
     void run(async () => {
       await claimRequest(request.id);
       await refresh(request.id);
@@ -329,7 +423,7 @@ export default function App() {
   }
 
   function onTransition(to: 'IN_PROGRESS' | 'COMPLETED') {
-    if (!request || !user || user.canHandle !== true || request.currentOwnerId !== user.id) return;
+    if (!request || !user || !canActAsHandler(user.role, user.canHandle) || request.currentOwnerId !== user.id) return;
     void run(async () => {
       await transition(request.id, to, user.id);
       await refresh(request.id);
@@ -388,7 +482,7 @@ export default function App() {
     event.preventDefault();
     void run(async () => {
       const session = await login(email, password);
-      const started = applySession(session);
+      const started = applySession(session, { dashboard: true });
       const [nextDepartments, nextTypes] = await Promise.all([getDepartments(), getRequestTypes()]);
       if (currentSessionGeneration() !== started) {
         return;
@@ -412,6 +506,7 @@ export default function App() {
     window.history.replaceState({}, '', window.location.pathname);
     setVerifyToken(null);
     setInviteToken(null);
+    setResetToken(null);
   }
 
   const workspace = user ? (
@@ -427,8 +522,6 @@ export default function App() {
       setTitle={setTitle}
       description={description}
       setDescription={setDescription}
-      loadId={loadId}
-      setLoadId={setLoadId}
       request={request}
       history={history}
       busy={busy}
@@ -438,17 +531,49 @@ export default function App() {
       intakeStep={intakeStep}
       canSubmitRequest={canSubmitRequest}
       onCreate={onCreate}
-      onLoad={onLoad}
       onClaim={onClaim}
       onTransition={onTransition}
       onAnalyze={onAnalyze}
       onProblemSolved={onProblemSolved}
       onPrepareRequest={onPrepareRequest}
       resetIntake={resetIntake}
-      showLoadForm={user.role !== 'SUPER_ADMIN'}
       showDetails={user.role !== 'SUPER_ADMIN'}
+      focus={formMode === 'intake' ? 'intake' : 'create'}
     />
   ) : null;
+
+  const formOverlay =
+    formMode !== null ? (
+      <FormOverlay
+        title={formMode === 'intake' ? 'AI Intake' : 'New Request'}
+        returnFocusId={formMode === 'intake' ? 'launch-ai-intake' : 'launch-new-request'}
+        onClose={closeForm}
+      >
+        {workspace}
+      </FormOverlay>
+    ) : null;
+
+  function openForm(mode: 'create' | 'intake') {
+    setFormMode(mode);
+    if (user?.role === 'SUPER_ADMIN') {
+      goTo('my-requests', { form: mode });
+      return;
+    }
+    setStaffView('my-requests');
+    const path = `/my-requests?form=${mode}`;
+    if (`${window.location.pathname}${window.location.search}` !== path) {
+      window.history.pushState({}, '', path);
+    }
+    setUrlSearch(`?form=${mode}`);
+  }
+
+  function closeForm() {
+    setFormMode(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete('form');
+    window.history.replaceState({}, '', `${url.pathname}${url.search}`);
+    setUrlSearch(url.search);
+  }
 
   if (!ready) {
     return (
@@ -460,7 +585,7 @@ export default function App() {
 
   if (verifyToken) {
     return (
-      <div className="page">
+      <div className="page auth-page">
         <header className="header">
           <h1>Internal Operations Service Hub</h1>
           <p>Verify your email to activate the company workspace</p>
@@ -486,9 +611,41 @@ export default function App() {
     );
   }
 
+  if (resetToken) {
+    return (
+      <div className="page auth-page">
+        <header className="header">
+          <h1>Internal Operations Service Hub</h1>
+          <p>Choose a new password</p>
+        </header>
+        {error ? (
+          <div className="alert" role="alert">
+            {error}
+          </div>
+        ) : null}
+        <ResetPasswordForm
+          token={resetToken}
+          busy={busy}
+          onReset={(token, nextPassword) =>
+            run(async () => {
+              await resetPassword(token, nextPassword);
+              endClientSession();
+              setUser(null);
+              clearAuthQuery();
+              setPassword('');
+              setGate('login');
+              setNotice('Password updated. Log in with the new password.');
+              setError('');
+            })
+          }
+        />
+      </div>
+    );
+  }
+
   if (inviteToken) {
     return (
-      <div className="page">
+      <div className="page auth-page">
         <header className="header">
           <h1>Internal Operations Service Hub</h1>
           <p>Set a password for your invited account</p>
@@ -517,7 +674,7 @@ export default function App() {
 
   if (!user) {
     return (
-      <div className="page">
+      <div className="page auth-page">
         <header className="header">
           <h1>Internal Operations Service Hub</h1>
           <p>Sign in to create and track internal department requests</p>
@@ -526,6 +683,11 @@ export default function App() {
           <div className="alert" role="alert">
             {error}
           </div>
+        ) : null}
+        {notice && gate === 'login' ? (
+          <p className="notice" role="status">
+            {notice}
+          </p>
         ) : null}
         {gate === 'check-email' ? (
           <CheckEmail
@@ -540,16 +702,42 @@ export default function App() {
           <>
             <SignupForm
               busy={busy}
+              onLeave={() => {
+                setGate('login');
+                setError('');
+              }}
               onSubmit={(input) =>
                 run(async () => {
-                  const result = await signupCompany(input.companyName, input.name, input.email, input.password);
+                  const result = await signupCompany(
+                    input.companyName,
+                    input.name,
+                    input.email,
+                    input.password,
+                    input.departments,
+                  );
+                  savePendingInvites(result.email, input.invitations);
                   setPendingEmail(result.email);
                   setGate('check-email');
                 })
               }
             />
+          </>
+        ) : null}
+        {gate === 'forgot' ? (
+          <>
+            <ForgotPasswordForm
+              busy={busy}
+              onSubmit={(nextEmail) =>
+                run(async () => {
+                  const result = await requestPasswordReset(nextEmail);
+                  setNotice(result.message);
+                  setGate('reset-sent');
+                  setError('');
+                })
+              }
+            />
             <button
-              className="btn-secondary"
+              className="link-button"
               type="button"
               onClick={() => {
                 setGate('login');
@@ -560,8 +748,25 @@ export default function App() {
             </button>
           </>
         ) : null}
+        {gate === 'reset-sent' ? (
+          <section className="card auth-card">
+            <h2>Check your email</h2>
+            <p className="muted">{notice}</p>
+            <button
+              className="btn-secondary"
+              type="button"
+              onClick={() => {
+                setGate('login');
+                setNotice('');
+                setError('');
+              }}
+            >
+              Back to log in
+            </button>
+          </section>
+        ) : null}
         {gate === 'login' ? (
-          <section className="card">
+          <section className="card auth-card">
             <h2>Log in</h2>
             <form className="stack" onSubmit={onLogin}>
               <label>
@@ -574,23 +779,42 @@ export default function App() {
                   required
                 />
               </label>
-              <label>
-                Password
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  autoComplete="current-password"
-                  required
-                />
-              </label>
+              <PasswordField
+                label="Password"
+                value={password}
+                onChange={setPassword}
+                autoComplete="current-password"
+              />
+              <button
+                className="link-button"
+                type="button"
+                onClick={() => {
+                  setGate('forgot');
+                  setError('');
+                  setNotice('');
+                }}
+              >
+                Forgot password?
+              </button>
               <button className="btn-primary" type="submit" disabled={busy}>
                 Log in
               </button>
             </form>
-            <button className="btn-secondary" type="button" onClick={() => setGate('signup')}>
-              Create a company workspace
-            </button>
+            <hr className="auth-divider" />
+            <p className="auth-aside">
+              New workspace?{' '}
+              <button
+                className="link-button"
+                type="button"
+                onClick={() => {
+                  setGate('signup');
+                  setError('');
+                  setNotice('');
+                }}
+              >
+                Create one
+              </button>
+            </p>
           </section>
         ) : null}
       </div>
@@ -607,10 +831,14 @@ export default function App() {
           </div>
         ) : null}
         {adminView === 'dashboard' ? (
-          <DashboardPage onNavigate={goTo} onUnauthorized={clearAccountWorkspace} />
+          <DashboardPage
+            onNavigate={goTo}
+            onUnauthorized={clearAccountWorkspace}
+            onOpenCompose={openForm}
+          />
         ) : null}
         {adminView === 'employees' ? (
-          <EmployeesPage busy={busy} run={run} onUnauthorized={clearAccountWorkspace} />
+          <EmployeesPage user={user} busy={busy} run={run} onUnauthorized={clearAccountWorkspace} />
         ) : null}
         {adminView === 'departments' ? (
           <DepartmentsPage busy={busy} run={run} onUnauthorized={clearAccountWorkspace} />
@@ -618,16 +846,27 @@ export default function App() {
         {adminView === 'requests' ? (
           <AdminRequestsPage
             createdRequestId={request?.id ?? null}
-            compose={workspace}
             onUnauthorized={clearAccountWorkspace}
             urlSearch={urlSearch}
           />
         ) : null}
-        {adminView === 'approvals' ? <ApprovalInbox role="SUPER_ADMIN" /> : null}
+        {adminView === 'my-requests' ? (
+          <>
+            <MyRequestsPage
+              listVersion={request?.id ?? 0}
+              onUnauthorized={clearAccountWorkspace}
+              onCreate={() => openForm('create')}
+              onIntake={() => openForm('intake')}
+            />
+            {formOverlay}
+          </>
+        ) : null}
+        {adminView === 'approvals' ? <ApprovalInbox urlSearch={urlSearch} /> : null}
         {adminView === 'settings' ? (
-          <ComingLaterPage
-            title="Settings"
-            detail="Company details are not implemented. Request types and their approval policies are managed on the Departments page. This page has no working controls."
+          <AccountSettings
+            user={user}
+            onUnauthorized={clearAccountWorkspace}
+            onUpdated={(patch) => setUser((current) => (current ? { ...current, ...patch } : current))}
           />
         ) : null}
       </AdminShell>
@@ -635,28 +874,134 @@ export default function App() {
   }
 
   return (
-    <div className="page">
-      <header className="header">
-        <h1>Internal Operations Service Hub</h1>
-        <p>Create and track internal department requests</p>
-        <div className="actor-switcher">
-          <span data-testid="signed-in-name">Signed in as {user.name}</span>
-          <span>{user.companyName}</span>
-          <button className="btn-secondary" type="button" onClick={onLogout} disabled={busy}>
-            Log out
-          </button>
-        </div>
-      </header>
-
+    <AdminShell
+      user={user}
+      view="dashboard"
+      busy={busy}
+      onNavigate={goTo}
+      onLogout={onLogout}
+      navigation={{
+        label: workspaceRoleLabel(user.role, user.canHandle),
+        links: staffLinks(user, staffView, (next) => {
+          setStaffView(next);
+          setFormMode(null);
+          const path = staffPath(next);
+          if (`${window.location.pathname}${window.location.search}` !== path) {
+            window.history.pushState({}, '', path);
+          }
+          setUrlSearch(window.location.search);
+        }),
+      }}
+    >
       {error ? (
         <div className="alert" role="alert">
           {error}
         </div>
       ) : null}
-
-      {user.role === 'DEPARTMENT_ADMIN' ? <ApprovalInbox role="DEPARTMENT_ADMIN" /> : null}
-
-      {workspace}
-    </div>
+      {staffView === 'dashboard' ? (
+        <StaffDashboard
+          user={user}
+          onUnauthorized={clearAccountWorkspace}
+          onCreate={() => openForm('create')}
+          onIntake={() => openForm('intake')}
+          onOpen={(next, query) => {
+            setStaffView(next);
+            setFormMode(null);
+            const params = new URLSearchParams();
+            for (const [key, value] of Object.entries(query ?? {})) {
+              if (value) params.set(key, value);
+            }
+            const qs = params.toString();
+            const path = `${staffPath(next)}${qs ? `?${qs}` : ''}`;
+            if (`${window.location.pathname}${window.location.search}` !== path) {
+              window.history.pushState({}, '', path);
+            }
+            setUrlSearch(window.location.search);
+          }}
+        />
+      ) : null}
+      {staffView === 'requests' && canActAsHandler(user.role, user.canHandle) ? (
+        <StaffRequestList user={user} onUnauthorized={clearAccountWorkspace} />
+      ) : null}
+      {staffView === 'my-requests' ? (
+        <>
+          <MyRequestsPage
+            listVersion={request?.id ?? 0}
+            onUnauthorized={clearAccountWorkspace}
+            onCreate={() => openForm('create')}
+            onIntake={() => openForm('intake')}
+          />
+          {formOverlay}
+        </>
+      ) : null}
+      {staffView === 'employees' && user.role === 'DEPARTMENT_ADMIN' ? (
+        <DepartmentEmployeesPage user={user} onUnauthorized={clearAccountWorkspace} />
+      ) : null}
+      {staffView === 'approvals' && user.role === 'DEPARTMENT_ADMIN' ? (
+        <ApprovalInbox urlSearch={urlSearch} />
+      ) : null}
+      {staffView === 'settings' ? (
+        <AccountSettings
+          user={user}
+          onUnauthorized={clearAccountWorkspace}
+          onUpdated={(patch) => setUser((current) => (current ? { ...current, ...patch } : current))}
+        />
+      ) : null}
+    </AdminShell>
   );
+}
+
+function staffLinks(
+  user: SessionUser,
+  current: StaffView,
+  onSelect: (view: StaffView) => void,
+) {
+  const links: {
+    key: string;
+    label: string;
+    current: boolean;
+    onSelect: () => void;
+  }[] = [
+    {
+      key: 'dashboard',
+      label: 'Dashboard',
+      current: current === 'dashboard',
+      onSelect: () => onSelect('dashboard'),
+    },
+  ];
+  if (canActAsHandler(user.role, user.canHandle)) {
+    links.push({
+      key: 'requests',
+      label: 'Requests',
+      current: current === 'requests',
+      onSelect: () => onSelect('requests'),
+    });
+  }
+  links.push({
+    key: 'my-requests',
+    label: 'My Requests',
+    current: current === 'my-requests',
+    onSelect: () => onSelect('my-requests'),
+  });
+  if (user.role === 'DEPARTMENT_ADMIN') {
+    links.push({
+      key: 'approvals',
+      label: 'Approvals',
+      current: current === 'approvals',
+      onSelect: () => onSelect('approvals'),
+    });
+    links.push({
+      key: 'employees',
+      label: 'Staff',
+      current: current === 'employees',
+      onSelect: () => onSelect('employees'),
+    });
+  }
+  links.push({
+    key: 'settings',
+    label: 'Settings',
+    current: current === 'settings',
+    onSelect: () => onSelect('settings'),
+  });
+  return links;
 }

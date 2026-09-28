@@ -1,9 +1,11 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Query, Req } from '@nestjs/common';
 import { RecordsActivity } from '../auth/auth.decorators';
 import { AuthenticatedRequest } from '../auth/session.guard';
 import { AssignOwnerDto } from './dto/assign-owner.dto';
 import { CreateRequestDto } from './dto/create-request.dto';
 import { DecideApprovalDto } from './dto/decide-approval.dto';
+import { ListApprovalsQueryDto } from './dto/list-approvals.query';
+import { ListQueueQueryDto } from './dto/list-queue.query';
 import { TransitionRequestDto } from './dto/transition-request.dto';
 import { RequestsService } from './requests.service';
 
@@ -17,10 +19,22 @@ export class RequestsController {
     return this.requestsService.create(request.auth!.id, dto);
   }
 
+  @Get('summary')
+  @RecordsActivity()
+  summary(@Req() request: AuthenticatedRequest) {
+    return this.requestsService.summary(request.auth!.id);
+  }
+
+  @Get()
+  @RecordsActivity()
+  list(@Req() request: AuthenticatedRequest, @Query() query: ListQueueQueryDto) {
+    return this.requestsService.listQueue(request.auth!.id, query);
+  }
+
   @Get('approvals')
   @RecordsActivity()
-  listApprovals(@Req() request: AuthenticatedRequest) {
-    return this.requestsService.listApprovals(request.auth!.id);
+  listApprovals(@Req() request: AuthenticatedRequest, @Query() query: ListApprovalsQueryDto) {
+    return this.requestsService.listApprovals(request.auth!.id, query);
   }
 
   @Get(':id/history')

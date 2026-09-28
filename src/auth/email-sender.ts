@@ -10,10 +10,11 @@ import { allowedOrigins } from './origin';
 
 export const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
 export const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+export const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000;
 export const EMAIL_NOT_CONFIGURED =
-  'Email delivery is not configured. Company signup and invitations cannot run until a mail provider is chosen.';
+  'Email delivery is not configured. Company signup, invitations, and password reset cannot run until a mail provider is chosen.';
 
-export type OutboundPurpose = 'email-verification' | 'invitation';
+export type OutboundPurpose = 'email-verification' | 'invitation' | 'password-reset';
 
 export type OutboundEmail = {
   to: string;
@@ -81,7 +82,9 @@ export class EmailSender {
     this.assertCanSend();
     this.messages.push(message);
     if (shouldLogOutboundEmail(process.env.NODE_ENV, process.env.DATABASE_URL)) {
-      console.log(`Email queued for ${message.to}: ${message.subject}`);
+      console.log(
+        `Development mail outbox for ${message.to}: ${message.subject}`,
+      );
       console.log(message.text);
     }
     const outboxPath = testEmailOutboxPath(

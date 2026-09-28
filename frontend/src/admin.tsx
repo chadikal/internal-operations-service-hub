@@ -1,56 +1,147 @@
-import { FormEvent, ReactNode, useEffect, useState } from 'react';
+﻿import { FormEvent, ReactNode, useEffect, useState } from 'react';
 import {
   ApiError,
   CompanyEmployee,
   currentSessionGeneration,
   DashboardCounts,
   Department,
-  DepartmentTemplate,
-  DepartmentTemplateId,
   EmployeeListFilters,
   getCompanyEmployees,
   getDashboardCounts,
   getDepartments,
-  getDepartmentTemplates,
-  getRequestTypes,
   SessionUser,
   StaleSessionResult,
-  updateDepartment,
-  deleteDepartment,
-  applyDepartmentTemplateTypes,
-  createRequestType,
-  updateRequestType,
-  ApprovalPolicy,
-  RequestType,
 } from './api';
-import { AddDepartmentForm, InviteStaffForm } from './onboarding';
+import { DepartmentWorkspace } from './department-manage';
+import { RequestStartActions } from './staff';
+import { staffRoleLabel } from './roles';
 import {
-  confirmedSuggestions,
-  draftsFromTemplate,
-  DraftSuggestion,
-  TemplatePicker,
-  TemplateSuggestionEditor,
-} from './department-templates';
+  canManageStaff,
+  EditStaffOverlay,
+  handlerCell,
+  InviteStaffButton,
+  InviteStaffOverlay,
+  RemoveStaffDialog,
+  StaffRowActions,
+} from './staff-manage';
 import { AdminView, adminPath } from './routing';
+import { approvalBreakdown, myRequestBreakdown, requestBreakdown } from './dashboard-figures';
+import { ApprovalsIcon, BuildingIcon, MyRequestsIcon, PeopleIcon, RequestsIcon, SummaryCard } from './summary-card';
 
-function roleLabel(role: string) {
-  if (role === 'SUPER_ADMIN') return 'Super Admin';
-  if (role === 'DEPARTMENT_ADMIN') return 'Department Admin';
-  if (role === 'EMPLOYEE') return 'Employee';
-  return role;
+function employeeFiltersFromLocation(): {
+  role: EmployeeListFilters['role'];
+  canHandle: EmployeeListFilters['canHandle'];
+} {
+  const params = new URLSearchParams(window.location.search);
+  const role = params.get('role');
+  const canHandle = params.get('canHandle');
+  return {
+    role: role === 'EMPLOYEE' || role === 'DEPARTMENT_ADMIN' || role === 'SUPER_ADMIN' || role === 'ADMIN' ? role : '',
+    canHandle: canHandle === 'true' || canHandle === 'false' ? canHandle : '',
+  };
+}
+
+export function workspaceRoleLabel(role: string, canHandle: boolean) {
+  return staffRoleLabel(role, canHandle);
+}
+
+function LogoutIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <path d="M10 7V5h9v14h-9v-2" />
+      <path d="M4 12h11" />
+      <path d="M12 8l4 4-4 4" />
+    </svg>
+  );
+}
+
+function NavGlyph({ name }: { name: string }) {
+  const common = {
+    viewBox: '0 0 24 24',
+    width: 20,
+    height: 20,
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.8,
+    'aria-hidden': true as const,
+  };
+  if (name === 'dashboard') {
+    return (
+      <svg {...common}>
+        <rect x="3" y="3" width="8" height="8" rx="1.5" />
+        <rect x="13" y="3" width="8" height="8" rx="1.5" />
+        <rect x="3" y="13" width="8" height="8" rx="1.5" />
+        <rect x="13" y="13" width="8" height="8" rx="1.5" />
+      </svg>
+    );
+  }
+  if (name === 'requests') {
+    return (
+      <svg {...common}>
+        <path d="M7 3h8l4 4v14H7z" />
+        <path d="M15 3v5h5" />
+        <path d="M10 12h6M10 16h6" />
+      </svg>
+    );
+  }
+  if (name === 'my-requests') {
+    return (
+      <svg {...common}>
+        <circle cx="12" cy="8" r="3" />
+        <path d="M6 19c.8-3 2.8-4.5 6-4.5s5.2 1.5 6 4.5" />
+      </svg>
+    );
+  }
+  if (name === 'approvals') {
+    return (
+      <svg {...common}>
+        <circle cx="12" cy="12" r="8" />
+        <path d="M8.5 12.5l2.2 2.2 4.8-5" />
+      </svg>
+    );
+  }
+  if (name === 'employees') {
+    return (
+      <svg {...common}>
+        <circle cx="9" cy="8" r="3" />
+        <path d="M3.5 19c.6-3 2.8-4.5 5.5-4.5s4.9 1.5 5.5 4.5" />
+        <circle cx="17" cy="9" r="2.2" />
+        <path d="M16.2 14.6c2.2.3 3.8 1.6 4.3 4.4" />
+      </svg>
+    );
+  }
+  if (name === 'departments') {
+    return (
+      <svg {...common}>
+        <path d="M4 20V6l8-3 8 3v14" />
+        <path d="M9 20v-5h6v5" />
+      </svg>
+    );
+  }
+  if (name === 'expand' || name === 'collapse') {
+    return (
+      <svg {...common}>
+        <path d={name === 'collapse' ? 'M15 6l-6 6 6 6' : 'M9 6l6 6-6 6'} />
+      </svg>
+    );
+  }
+  return (
+    <svg {...common}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4" />
+    </svg>
+  );
 }
 
 function NavLink({
   view,
   current,
   children,
-  comingLater,
   onNavigate,
 }: {
   view: AdminView;
   current: AdminView;
   children: string;
-  comingLater?: boolean;
   onNavigate: (view: AdminView, query?: Record<string, string>) => void;
 }) {
   return (
@@ -58,13 +149,14 @@ function NavLink({
       href={adminPath(view)}
       className="sidebar-link"
       aria-current={current === view ? 'page' : undefined}
+      title={children}
       onClick={(event) => {
         event.preventDefault();
         onNavigate(view);
       }}
     >
-      <span>{children}</span>
-      {comingLater ? <span className="soon-badge">Coming later</span> : null}
+      <NavGlyph name={view} />
+      <span className="sidebar-label">{children}</span>
     </a>
   );
 }
@@ -76,6 +168,7 @@ export function AdminShell({
   children,
   onNavigate,
   onLogout,
+  navigation,
 }: {
   user: SessionUser;
   view: AdminView;
@@ -83,39 +176,86 @@ export function AdminShell({
   children: ReactNode;
   onNavigate: (view: AdminView, query?: Record<string, string>) => void;
   onLogout: () => void;
+  navigation?: {
+    label: string;
+    links: { key: string; label: string; current: boolean; onSelect: () => void }[];
+  };
 }) {
+  const roleLabel = navigation ? navigation.label : 'Super Admin';
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem('hub-sidebar') === 'collapsed');
+
+  useEffect(() => {
+    localStorage.setItem('hub-sidebar', collapsed ? 'collapsed' : 'expanded');
+  }, [collapsed]);
+
   return (
-    <div className="admin-shell">
+    <div className={collapsed ? 'admin-shell sidebar-collapsed' : 'admin-shell'}>
       <aside className="sidebar">
         <div className="sidebar-brand">
-          <p className="sidebar-kicker">Super Admin</p>
-          <h1>Operations Hub</h1>
+          <button
+            className="sidebar-toggle"
+            type="button"
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            onClick={() => setCollapsed((current) => !current)}
+          >
+            <NavGlyph name={collapsed ? 'expand' : 'collapse'} />
+          </button>
+          <div className="sidebar-brand-text">
+            <p className="sidebar-kicker">{roleLabel}</p>
+            <h1>Internal Operations Service Hub</h1>
+          </div>
         </div>
-        <nav className="sidebar-nav" aria-label="Super Admin">
-          <NavLink view="dashboard" current={view} onNavigate={onNavigate}>
-            Dashboard
-          </NavLink>
-          <NavLink view="employees" current={view} onNavigate={onNavigate}>
-            Employees
-          </NavLink>
-          <NavLink view="departments" current={view} onNavigate={onNavigate}>
-            Departments
-          </NavLink>
-          <NavLink view="requests" current={view} onNavigate={onNavigate}>
-            Requests
-          </NavLink>
-          <NavLink view="approvals" current={view} onNavigate={onNavigate}>
-            Approvals
-          </NavLink>
-          <NavLink view="settings" current={view} comingLater onNavigate={onNavigate}>
-            Settings
-          </NavLink>
+        <nav className="sidebar-nav" aria-label={roleLabel}>
+          {navigation ? (
+            navigation.links.map((link) => (
+              <a
+                key={link.key}
+                href={`/${link.key}`}
+                className="sidebar-link"
+                aria-current={link.current ? 'page' : undefined}
+                title={link.label}
+                onClick={(event) => {
+                  event.preventDefault();
+                  link.onSelect();
+                }}
+              >
+                <NavGlyph name={link.key} />
+                <span className="sidebar-label">{link.label}</span>
+              </a>
+            ))
+          ) : (
+            <>
+              <NavLink view="dashboard" current={view} onNavigate={onNavigate}>
+                Dashboard
+              </NavLink>
+              <NavLink view="requests" current={view} onNavigate={onNavigate}>
+                Requests
+              </NavLink>
+              <NavLink view="my-requests" current={view} onNavigate={onNavigate}>
+                My Requests
+              </NavLink>
+              <NavLink view="approvals" current={view} onNavigate={onNavigate}>
+                Approvals
+              </NavLink>
+              <NavLink view="employees" current={view} onNavigate={onNavigate}>
+                Staff
+              </NavLink>
+              <NavLink view="departments" current={view} onNavigate={onNavigate}>
+                Departments
+              </NavLink>
+              <NavLink view="settings" current={view} onNavigate={onNavigate}>
+                Settings
+              </NavLink>
+            </>
+          )}
         </nav>
         <div className="sidebar-footer">
           <p data-testid="signed-in-name">Signed in as {user.name}</p>
           <p>{user.companyName}</p>
-          <button className="btn-secondary" type="button" onClick={onLogout} disabled={busy}>
-            Log out
+          <button className="btn-secondary" type="button" onClick={onLogout} disabled={busy} title="Log out">
+            <LogoutIcon />
+            <span className="sidebar-label">Log out</span>
           </button>
         </div>
       </aside>
@@ -128,20 +268,24 @@ export function AdminShell({
 
 export function ComingLaterPage({ title, detail }: { title: string; detail: string }) {
   return (
-    <section className="card" data-testid="coming-later">
-      <h2>{title}</h2>
-      <p className="muted">Coming later</p>
+    <div data-testid="coming-later">
+      <header className="workspace-header">
+        <h2>{title}</h2>
+        <p className="muted">Coming later</p>
+      </header>
       <p className="muted">{detail}</p>
-    </section>
+    </div>
   );
 }
 
 export function DashboardPage({
   onNavigate,
   onUnauthorized,
+  onOpenCompose,
 }: {
   onNavigate: (view: AdminView, query?: Record<string, string>) => void;
   onUnauthorized: () => void;
+  onOpenCompose: (mode: 'create' | 'intake') => void;
 }) {
   const [counts, setCounts] = useState<DashboardCounts | null>(null);
   const [loading, setLoading] = useState(true);
@@ -185,73 +329,139 @@ export function DashboardPage({
     return <p className="muted">No dashboard data yet.</p>;
   }
 
-  const cards: {
-    key: string;
-    label: string;
-    value: number;
-    view: AdminView;
-    query?: Record<string, string>;
-    note?: string;
-  }[] = [
-    { key: 'employees', label: 'Employees', value: counts.employees, view: 'employees' },
-    { key: 'departments', label: 'Departments', value: counts.departments, view: 'departments' },
-    { key: 'requests', label: 'All requests', value: counts.requests, view: 'requests' },
-    {
-      key: 'active',
-      label: 'Active requests',
-      value: counts.activeRequests,
-      view: 'requests',
-      query: { status: 'ACTIVE' },
-      note: 'SUBMITTED + IN_PROGRESS',
-    },
-    { key: 'submitted', label: 'SUBMITTED', value: counts.submitted, view: 'requests', query: { status: 'SUBMITTED' } },
-    { key: 'inProgress', label: 'IN_PROGRESS', value: counts.inProgress, view: 'requests', query: { status: 'IN_PROGRESS' } },
-    { key: 'completed', label: 'COMPLETED', value: counts.completed, view: 'requests', query: { status: 'COMPLETED' } },
-  ];
+  function open(view: AdminView, query?: Record<string, string>) {
+    onNavigate(view, query);
+  }
 
   return (
     <div>
-      <header className="workspace-header">
-        <h2>Dashboard</h2>
-        <p className="muted">Counts for this company only. This dashboard does not count approvals. Top handlers are not implemented.</p>
+      <header className="workspace-header section-heading">
+        <div>
+          <h2>Dashboard</h2>
+          <p className="muted">Figures are for this company.</p>
+        </div>
+        <RequestStartActions
+          onCreate={() => onOpenCompose('create')}
+          onIntake={() => onOpenCompose('intake')}
+        />
       </header>
-      <div className="stat-grid" data-testid="dashboard-counts">
-        {cards.map((card) => (
+      <div className="summary-board summary-board-paired" data-testid="dashboard-counts">
+        <SummaryCard
+          className="summary-card-requests"
+          title="Requests"
+          total={counts.requests.total}
+          totalTestId="count-requests"
+          icon={<RequestsIcon />}
+          href={adminPath('requests')}
+          onOpen={() => open('requests')}
+          items={requestBreakdown(counts.requests, (query) => ({
+            href: adminPath('requests', query),
+            onOpen: () => open('requests', query),
+          }))}
+        />
+        <SummaryCard
+          title="My Requests"
+          total={counts.myRequests.total}
+          totalTestId="count-my-requests"
+          icon={<MyRequestsIcon />}
+          href={adminPath('my-requests')}
+          onOpen={() => open('my-requests')}
+          items={myRequestBreakdown(counts.myRequests, (query) => ({
+            href: adminPath('my-requests', query),
+            onOpen: () => open('my-requests', query),
+          }))}
+        />
+        <SummaryCard
+          title="Approvals"
+          total={counts.approvals.total}
+          totalTestId="count-approvals"
+          icon={<ApprovalsIcon />}
+          href={adminPath('approvals', { status: 'all' })}
+          onOpen={() => open('approvals', { status: 'all' })}
+          items={approvalBreakdown(counts.approvals, 'count', (status) => ({
+            href: adminPath('approvals', { status }),
+            onOpen: () => open('approvals', { status }),
+          }))}
+        />
+        <div className="summary-panel" data-testid="staff-departments-panel">
+          <SummaryCard
+            className="summary-card-embedded"
+            title="Staff"
+            total={counts.people.total}
+            totalTestId="count-employees"
+            icon={<PeopleIcon />}
+            href={adminPath('employees')}
+            onOpen={() => open('employees')}
+            items={[
+              {
+                key: 'admins',
+                label: 'Admins',
+                value: counts.people.admins,
+                testId: 'count-admins',
+                href: adminPath('employees', { role: 'ADMIN' }),
+                onOpen: () => open('employees', { role: 'ADMIN' }),
+              },
+              {
+                key: 'handlers',
+                label: 'Handlers',
+                value: counts.people.handlers,
+                testId: 'count-handlers',
+                href: adminPath('employees', { canHandle: 'true' }),
+                onOpen: () => open('employees', { canHandle: 'true' }),
+              },
+              {
+                key: 'employees',
+                label: 'Employees',
+                value: counts.people.employees,
+                testId: 'count-role-employees',
+                href: adminPath('employees', { role: 'EMPLOYEE' }),
+                onOpen: () => open('employees', { role: 'EMPLOYEE' }),
+              },
+            ]}
+          />
           <a
-            key={card.key}
-            className="stat-card"
-            href={adminPath(card.view, card.query)}
+            className="summary-departments summary-card-main"
+            href={adminPath('departments')}
+            data-testid="departments-count"
             onClick={(event) => {
               event.preventDefault();
-              onNavigate(card.view, card.query);
+              open('departments');
             }}
           >
-            <span className="stat-label">{card.label}</span>
-            <strong data-testid={`count-${card.key}`}>{card.value}</strong>
-            {card.note ? <span className="muted">{card.note}</span> : null}
+            <span className="summary-icon" aria-hidden="true">
+              <BuildingIcon />
+            </span>
+            <span className="summary-figure">
+              <strong className="summary-total" data-testid="count-departments">
+                {counts.departments}
+              </strong>
+              <span className="summary-label">Departments</span>
+            </span>
           </a>
-        ))}
+        </div>
       </div>
-      {counts.requests === 0 ? (
+      {counts.requests.total === 0 ? (
         <p className="muted" data-testid="dashboard-empty-requests">
-          No requests in this company yet. Open Requests to create one.
+          No requests in this company yet. Use New Request to submit one.
         </p>
       ) : null}
-      {counts.employees === 0 ? (
-        <p className="muted">No employees in this company yet.</p>
+      {counts.people.total === 0 ? (
+        <p className="muted">No staff in this company yet.</p>
       ) : null}
       {counts.departments === 0 ? (
-        <p className="muted">No departments yet. Add one on the Departments page before inviting staff.</p>
+          <p className="muted">No departments yet. Add one on Departments before inviting staff.</p>
       ) : null}
     </div>
   );
 }
 
 export function EmployeesPage({
+  user,
   busy,
   run,
   onUnauthorized,
 }: {
+  user: SessionUser;
   busy: boolean;
   run: (action: () => Promise<void>) => void;
   onUnauthorized: () => void;
@@ -260,11 +470,16 @@ export function EmployeesPage({
   const [employees, setEmployees] = useState<CompanyEmployee[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const initialEmployeeFilters = employeeFiltersFromLocation();
   const [q, setQ] = useState('');
   const [departmentId, setDepartmentId] = useState('');
-  const [role, setRole] = useState<EmployeeListFilters['role']>('');
-  const [canHandle, setCanHandle] = useState<EmployeeListFilters['canHandle']>('');
+  const [role, setRole] = useState<EmployeeListFilters['role']>(initialEmployeeFilters.role);
+  const [canHandle, setCanHandle] = useState<EmployeeListFilters['canHandle']>(initialEmployeeFilters.canHandle);
   const [active, setActive] = useState<EmployeeListFilters['active']>('');
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [editing, setEditing] = useState<CompanyEmployee | null>(null);
+  const [removing, setRemoving] = useState<CompanyEmployee | null>(null);
+  const [notice, setNotice] = useState('');
 
   function filters(): EmployeeListFilters {
     return {
@@ -302,7 +517,7 @@ export function EmployeesPage({
           return;
         }
         setEmployees(null);
-        setError(err instanceof Error ? err.message : 'Could not load employees');
+        setError(err instanceof Error ? err.message : 'Could not load staff');
       })
       .finally(() => setLoading(false));
   }, [q, departmentId, role, canHandle, active]);
@@ -321,17 +536,24 @@ export function EmployeesPage({
           onUnauthorized();
           return;
         }
-        setError(err instanceof Error ? err.message : 'Could not load employees');
+        setError(err instanceof Error ? err.message : 'Could not load staff');
       })
       .finally(() => setLoading(false));
   }
 
   return (
     <div>
-      <header className="workspace-header">
-        <h2>Employees</h2>
-        <p className="muted">Accounts in this company. Handler eligibility is separate from role.</p>
+      <header className="workspace-header section-heading">
+        <div>
+          <h2>Staff</h2>
+        </div>
+        <InviteStaffButton onClick={() => setInviteOpen(true)} />
       </header>
+      {notice ? (
+        <p className="muted" role="status">
+          {notice}
+        </p>
+      ) : null}
       <form className="filters" onSubmit={onSearch}>
         <label>
           Search name or email
@@ -352,6 +574,7 @@ export function EmployeesPage({
           Role
           <select value={role} onChange={(event) => setRole(event.target.value as EmployeeListFilters['role'])}>
             <option value="">All roles</option>
+            <option value="ADMIN">Admins</option>
             <option value="EMPLOYEE">Employee</option>
             <option value="DEPARTMENT_ADMIN">Department Admin</option>
             <option value="SUPER_ADMIN">Super Admin</option>
@@ -360,12 +583,13 @@ export function EmployeesPage({
         <label>
           Handler eligibility
           <select
+            aria-label="Handler eligibility"
             value={canHandle}
             onChange={(event) => setCanHandle(event.target.value as EmployeeListFilters['canHandle'])}
           >
             <option value="">All</option>
-            <option value="true">Can handle</option>
-            <option value="false">Cannot handle</option>
+            <option value="true">Handlers</option>
+            <option value="false">Non-handlers</option>
           </select>
         </label>
         <label>
@@ -385,10 +609,10 @@ export function EmployeesPage({
           {error}
         </div>
       ) : null}
-      {loading ? <p>Loading employees…</p> : null}
+      {loading ? <p>Loading staff…</p> : null}
       {!loading && employees && employees.length === 0 ? (
         <p className="muted" data-testid="employees-empty">
-          No employees match these filters.
+          No staff match these filters.
         </p>
       ) : null}
       {!loading && employees && employees.length > 0 ? (
@@ -400,8 +624,9 @@ export function EmployeesPage({
                 <th scope="col">Email</th>
                 <th scope="col">Department</th>
                 <th scope="col">Role</th>
-                <th scope="col">canHandle</th>
+                <th scope="col">Handler</th>
                 <th scope="col">Active</th>
+                <th scope="col">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -410,432 +635,68 @@ export function EmployeesPage({
                   <td>{employee.name}</td>
                   <td>{employee.email ?? '—'}</td>
                   <td>{employee.department?.name ?? '—'}</td>
-                  <td>{roleLabel(employee.role)}</td>
-                  <td>{employee.canHandle ? 'Yes' : 'No'}</td>
+                  <td>{staffRoleLabel(employee.role, employee.canHandle)}</td>
+                  <td>{handlerCell(employee)}</td>
                   <td>{employee.active ? 'Active' : 'Inactive'}</td>
+                  <td>
+                    {canManageStaff(user, employee) ? (
+                      <StaffRowActions
+                        employee={employee}
+                        onEdit={() => setEditing(employee)}
+                        onRemove={() => setRemoving(employee)}
+                      />
+                    ) : null}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       ) : null}
-      <InviteStaffForm
-        departments={departments}
-        busy={busy}
-        run={run}
-        onInvited={async () => {
-          await loadList(currentSessionGeneration());
-        }}
-      />
+      {inviteOpen ? (
+        <InviteStaffOverlay
+          mode="company"
+          departments={departments}
+          busy={busy}
+          run={run}
+          onClose={() => setInviteOpen(false)}
+          onInvited={async () => {
+            setNotice('Invitation sent.');
+            await loadList(currentSessionGeneration());
+          }}
+        />
+      ) : null}
+      {editing ? (
+        <EditStaffOverlay
+          mode="company"
+          employee={editing}
+          departments={departments}
+          busy={busy}
+          run={run}
+          onClose={() => setEditing(null)}
+          onSaved={async () => {
+            setNotice('');
+            await loadList(currentSessionGeneration());
+          }}
+        />
+      ) : null}
+      {removing ? (
+        <RemoveStaffDialog
+          mode="company"
+          employee={removing}
+          busy={busy}
+          run={run}
+          onClose={() => setRemoving(null)}
+          onRemoved={async () => {
+            setNotice('');
+            await loadList(currentSessionGeneration());
+          }}
+        />
+      ) : null}
     </div>
   );
 }
 
-function policyLabel(policy: ApprovalPolicy) {
-  if (policy === 'DEPARTMENT_ADMIN') return 'Department Admin';
-  if (policy === 'SUPER_ADMIN') return 'Super Admin';
-  return 'None';
-}
-
-function RequestTypeRow({
-  item,
-  busy,
-  run,
-  onChanged,
-  onUnauthorized,
-}: {
-  item: RequestType;
-  busy: boolean;
-  run: (action: () => Promise<void>) => void;
-  onChanged: () => Promise<void>;
-  onUnauthorized: () => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [name, setName] = useState(item.name);
-  const [policy, setPolicy] = useState<ApprovalPolicy>(item.approvalPolicy);
-  const [rowError, setRowError] = useState('');
-
-  useEffect(() => {
-    setName(item.name);
-    setPolicy(item.approvalPolicy);
-  }, [item.name, item.approvalPolicy]);
-
-  function fail(error: unknown, fallback: string) {
-    if (error instanceof StaleSessionResult) {
-      return;
-    }
-    if (error instanceof ApiError && error.status === 401) {
-      onUnauthorized();
-      return;
-    }
-    setRowError(error instanceof Error ? error.message : fallback);
-  }
-
-  return (
-    <li>
-      {editing ? (
-        <form
-          className="actions"
-          onSubmit={(event: FormEvent) => {
-            event.preventDefault();
-            run(async () => {
-              setRowError('');
-              try {
-                await updateRequestType(item.id, { name, approvalPolicy: policy });
-                setEditing(false);
-                await onChanged();
-              } catch (error) {
-                fail(error, 'Could not update the request type');
-                if (error instanceof StaleSessionResult || (error instanceof ApiError && error.status === 401)) {
-                  throw error;
-                }
-              }
-            });
-          }}
-        >
-          <label>
-            New name for {item.name}
-            <input value={name} onChange={(event) => setName(event.target.value)} required maxLength={200} />
-          </label>
-          <label>
-            Approval policy for {item.name}
-            <select
-              value={policy}
-              onChange={(event) => setPolicy(event.target.value as ApprovalPolicy)}
-            >
-              <option value="NONE">None</option>
-              <option value="DEPARTMENT_ADMIN">Department Admin</option>
-              <option value="SUPER_ADMIN">Super Admin</option>
-            </select>
-          </label>
-          <button className="btn-secondary" type="submit" disabled={busy}>
-            Save type
-          </button>
-          <button
-            className="btn-secondary"
-            type="button"
-            disabled={busy}
-            onClick={() => {
-              setEditing(false);
-              setName(item.name);
-              setPolicy(item.approvalPolicy);
-              setRowError('');
-            }}
-          >
-            Cancel
-          </button>
-        </form>
-      ) : (
-        <div className="actions">
-          <span>
-            {item.name} · {policyLabel(item.approvalPolicy)}
-          </span>
-          <button className="btn-secondary" type="button" disabled={busy} onClick={() => setEditing(true)}>
-            Edit {item.name}
-          </button>
-        </div>
-      )}
-      {rowError ? (
-        <div className="alert" role="alert">
-          {rowError}
-        </div>
-      ) : null}
-    </li>
-  );
-}
-
-function AddRequestTypeForm({
-  department,
-  busy,
-  run,
-  onAdded,
-}: {
-  department: Department;
-  busy: boolean;
-  run: (action: () => Promise<void>) => void;
-  onAdded: () => Promise<void>;
-}) {
-  const [name, setName] = useState('');
-  const [policy, setPolicy] = useState<ApprovalPolicy>('NONE');
-  const [formError, setFormError] = useState('');
-
-  return (
-    <form
-      className="stack"
-      onSubmit={(event: FormEvent) => {
-        event.preventDefault();
-        run(async () => {
-          setFormError('');
-          try {
-            await createRequestType(department.id, name, policy);
-            setName('');
-            setPolicy('NONE');
-            await onAdded();
-          } catch (error) {
-            if (error instanceof StaleSessionResult) {
-              return;
-            }
-            setFormError(error instanceof Error ? error.message : 'Could not add the request type');
-            if (error instanceof ApiError && error.status === 401) {
-              throw error;
-            }
-          }
-        });
-      }}
-    >
-      <label>
-        New type for {department.name}
-        <input value={name} onChange={(event) => setName(event.target.value)} required maxLength={200} />
-      </label>
-      <label>
-        Approval policy for new {department.name} type
-        <select value={policy} onChange={(event) => setPolicy(event.target.value as ApprovalPolicy)}>
-          <option value="NONE">None</option>
-          <option value="DEPARTMENT_ADMIN">Department Admin</option>
-          <option value="SUPER_ADMIN">Super Admin</option>
-        </select>
-      </label>
-      <button className="btn-secondary" type="submit" disabled={busy}>
-        Add request type to {department.name}
-      </button>
-      {formError ? (
-        <div className="alert" role="alert">
-          {formError}
-        </div>
-      ) : null}
-    </form>
-  );
-}
-
-function ApplyTemplateForm({
-  department,
-  templates,
-  busy,
-  run,
-  onApplied,
-}: {
-  department: Department;
-  templates: DepartmentTemplate[];
-  busy: boolean;
-  run: (action: () => Promise<void>) => void;
-  onApplied: () => Promise<void>;
-}) {
-  const [templateId, setTemplateId] = useState('');
-  const [drafts, setDrafts] = useState<DraftSuggestion[]>([]);
-  const [formError, setFormError] = useState('');
-  const selected = templates.find((item) => item.id === templateId);
-
-  return (
-    <form
-      className="stack"
-      onSubmit={(event: FormEvent) => {
-        event.preventDefault();
-        if (templateId === '') {
-          return;
-        }
-        run(async () => {
-          setFormError('');
-          try {
-            await applyDepartmentTemplateTypes(department.id, {
-              templateId: templateId as DepartmentTemplateId,
-              requestTypes: confirmedSuggestions(drafts),
-            });
-            setTemplateId('');
-            setDrafts([]);
-            await onApplied();
-          } catch (error) {
-            if (error instanceof StaleSessionResult) {
-              return;
-            }
-            setFormError(error instanceof Error ? error.message : 'Could not apply the template');
-            if (error instanceof ApiError && error.status === 401) {
-              throw error;
-            }
-          }
-        });
-      }}
-    >
-      <TemplatePicker
-        label={`Template to apply to ${department.name}`}
-        templates={templates}
-        value={templateId}
-        allowNone
-        onChange={(nextId) => {
-          setTemplateId(nextId);
-          setDrafts(draftsFromTemplate(templates.find((item) => item.id === nextId)));
-        }}
-      />
-      {selected?.unspecifiedNotice ? (
-        <p className="muted" role="status">
-          {selected.unspecifiedNotice}
-        </p>
-      ) : null}
-      {selected?.id === 'CUSTOM_EMPTY' ? (
-        <p className="muted">Custom/Empty suggests no request types.</p>
-      ) : null}
-      {templateId ? (
-        <>
-          <TemplateSuggestionEditor
-            drafts={drafts}
-            scope={department.name}
-            onChange={setDrafts}
-          />
-          <button className="btn-secondary" type="submit" disabled={busy}>
-            Apply suggested types to {department.name}
-          </button>
-        </>
-      ) : null}
-      {formError ? (
-        <div className="alert" role="alert">
-          {formError}
-        </div>
-      ) : null}
-    </form>
-  );
-}
-
-function DepartmentRow({
-  department,
-  types,
-  templates,
-  busy,
-  run,
-  onChanged,
-  onUnauthorized,
-}: {
-  department: Department;
-  types: RequestType[];
-  templates: DepartmentTemplate[];
-  busy: boolean;
-  run: (action: () => Promise<void>) => void;
-  onChanged: () => Promise<void>;
-  onUnauthorized: () => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [name, setName] = useState(department.name);
-  const [rowError, setRowError] = useState('');
-
-  useEffect(() => {
-    setName(department.name);
-  }, [department.name]);
-
-  function fail(error: unknown, fallback: string) {
-    if (error instanceof StaleSessionResult) {
-      return;
-    }
-    if (error instanceof ApiError && error.status === 401) {
-      onUnauthorized();
-      return;
-    }
-    setRowError(error instanceof Error ? error.message : fallback);
-  }
-
-  return (
-    <li>
-      {editing ? (
-        <form
-          className="actions"
-          onSubmit={(event: FormEvent) => {
-            event.preventDefault();
-            run(async () => {
-              setRowError('');
-              try {
-                await updateDepartment(department.id, name);
-                setEditing(false);
-                await onChanged();
-              } catch (error) {
-                fail(error, 'Could not rename the department');
-                if (error instanceof StaleSessionResult || (error instanceof ApiError && error.status === 401)) {
-                  throw error;
-                }
-              }
-            });
-          }}
-        >
-          <label>
-            New name for {department.name}
-            <input value={name} onChange={(event) => setName(event.target.value)} required maxLength={200} />
-          </label>
-          <button className="btn-secondary" type="submit" disabled={busy}>
-            Save name
-          </button>
-          <button
-            className="btn-secondary"
-            type="button"
-            disabled={busy}
-            onClick={() => {
-              setEditing(false);
-              setName(department.name);
-              setRowError('');
-            }}
-          >
-            Cancel
-          </button>
-        </form>
-      ) : (
-        <div className="actions">
-          <span>{department.name}</span>
-          <button className="btn-secondary" type="button" disabled={busy} onClick={() => setEditing(true)}>
-            Rename {department.name}
-          </button>
-          <button
-            className="btn-secondary"
-            type="button"
-            disabled={busy}
-            onClick={() => {
-              run(async () => {
-                setRowError('');
-                try {
-                  await deleteDepartment(department.id);
-                  await onChanged();
-                } catch (error) {
-                  fail(error, 'Could not delete the department');
-                  if (error instanceof StaleSessionResult || (error instanceof ApiError && error.status === 401)) {
-                    throw error;
-                  }
-                }
-              });
-            }}
-          >
-            Delete {department.name}
-          </button>
-        </div>
-      )}
-      {rowError ? (
-        <div className="alert" role="alert">
-          {rowError}
-        </div>
-      ) : null}
-      <div className="type-block" data-testid={`request-types-for-${department.name}`}>
-        <p className="muted">Request types for {department.name}</p>
-        {types.length === 0 ? (
-          <p className="muted">No request types yet.</p>
-        ) : (
-          <ul className="plain-list">
-            {types.map((item) => (
-              <RequestTypeRow
-                key={item.id}
-                item={item}
-                busy={busy}
-                run={run}
-                onChanged={onChanged}
-                onUnauthorized={onUnauthorized}
-              />
-            ))}
-          </ul>
-        )}
-        <AddRequestTypeForm department={department} busy={busy} run={run} onAdded={onChanged} />
-        <ApplyTemplateForm
-          department={department}
-          templates={templates}
-          busy={busy}
-          run={run}
-          onApplied={onChanged}
-        />
-      </div>
-    </li>
-  );
-}
 
 export function DepartmentsPage({
   busy,
@@ -846,117 +707,5 @@ export function DepartmentsPage({
   run: (action: () => Promise<void>) => void;
   onUnauthorized: () => void;
 }) {
-  const [departments, setDepartments] = useState<Department[] | null>(null);
-  const [requestTypes, setRequestTypes] = useState<RequestType[]>([]);
-  const [templates, setTemplates] = useState<DepartmentTemplate[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-
-  async function refresh(generation = currentSessionGeneration()) {
-    const [next, nextTypes, nextTemplates] = await Promise.all([
-      getDepartments(),
-      getRequestTypes(),
-      getDepartmentTemplates(),
-    ]);
-    if (currentSessionGeneration() !== generation) {
-      throw new StaleSessionResult();
-    }
-    setDepartments(next);
-    setRequestTypes(nextTypes);
-    setTemplates(nextTemplates);
-  }
-
-  useEffect(() => {
-    const generation = currentSessionGeneration();
-    setLoading(true);
-    setError('');
-    refresh(generation)
-      .catch((err: unknown) => {
-        if (err instanceof StaleSessionResult) {
-          return;
-        }
-        if (err instanceof ApiError && err.status === 401) {
-          onUnauthorized();
-          return;
-        }
-        setError(err instanceof Error ? err.message : 'Could not load departments');
-      })
-      .finally(() => setLoading(false));
-  }, []);
-
-  return (
-    <div>
-      <header className="workspace-header">
-        <h2>Departments</h2>
-        <p className="muted">
-          New companies start with IT, HR, and Finance. Those names are ordinary departments: you
-          can rename them or delete unused ones. A department that still has employees or
-          requests cannot be deleted.           Optional templates (IT, HR, Finance, Operations, Marketing, Facilities,
-          Custom/Empty) can suggest types to review before they apply. The department name stays
-          independent of the template. Create and edit request types here. Each type stores an
-          approval policy snapshot when a request is submitted; later edits do not change
-          existing requests. Approval decisions are not implemented.
-        </p>
-      </header>
-      {error ? (
-        <div className="alert" role="alert">
-          {error}
-        </div>
-      ) : null}
-      {loading ? <p>Loading departments…</p> : null}
-      {!loading && departments && departments.length === 0 ? (
-        <p className="muted" data-testid="departments-empty">
-          No departments yet. Add one below.
-        </p>
-      ) : null}
-      {!loading && departments && departments.length > 0 ? (
-        <ul className="plain-list" data-testid="department-list">
-          {departments.map((department) => (
-            <DepartmentRow
-              key={department.id}
-              department={department}
-              types={requestTypes.filter((item) => item.departmentId === department.id)}
-              templates={templates}
-              busy={busy}
-              run={run}
-              onChanged={async () => {
-                setError('');
-                try {
-                  await refresh();
-                } catch (err) {
-                  if (err instanceof StaleSessionResult) {
-                    return;
-                  }
-                  setError(err instanceof Error ? err.message : 'Could not refresh departments');
-                  if (err instanceof ApiError && err.status === 401) {
-                    throw err;
-                  }
-                }
-              }}
-              onUnauthorized={onUnauthorized}
-            />
-          ))}
-        </ul>
-      ) : null}
-      <AddDepartmentForm
-        busy={busy}
-        run={run}
-        templates={templates}
-        onAdded={async () => {
-          setError('');
-          try {
-            await refresh();
-          } catch (err) {
-            if (err instanceof StaleSessionResult) {
-              return;
-            }
-            setError(err instanceof Error ? err.message : 'Could not refresh departments');
-            if (err instanceof ApiError && err.status === 401) {
-              throw err;
-            }
-          }
-        }}
-      />
-    </div>
-  );
+  return <DepartmentWorkspace busy={busy} run={run} onUnauthorized={onUnauthorized} />;
 }
