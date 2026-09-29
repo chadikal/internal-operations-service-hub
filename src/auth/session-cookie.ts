@@ -4,12 +4,13 @@ type CookieOptions = {
   httpOnly: boolean;
   path: string;
   maxAge: number;
-  sameSite: 'lax';
+  sameSite: 'lax' | 'none';
   secure: boolean;
 };
 
 function serializeCookie(name: string, value: string, options: CookieOptions): string {
-  const parts = [`${name}=${value}`, `Max-Age=${options.maxAge}`, `Path=${options.path}`, 'SameSite=Lax'];
+  const sameSite = options.sameSite === 'none' ? 'None' : 'Lax';
+  const parts = [`${name}=${value}`, `Max-Age=${options.maxAge}`, `Path=${options.path}`, `SameSite=${sameSite}`];
   if (options.httpOnly) {
     parts.push('HttpOnly');
   }
@@ -36,12 +37,13 @@ function parseCookie(header: string): Record<string, string> {
 }
 
 function cookieOptions(maxAge: number): CookieOptions {
+  const production = process.env.NODE_ENV === 'production';
   return {
     httpOnly: true,
     path: '/',
     maxAge,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    sameSite: production ? 'none' : 'lax',
+    secure: production,
   };
 }
 
