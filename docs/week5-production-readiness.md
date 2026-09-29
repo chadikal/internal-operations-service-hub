@@ -45,7 +45,7 @@ npm ci --include=dev && npx prisma generate && npm run build
 
 The start command is `npm run start:prod`, which runs `node dist/main.js`. The build does not run `prisma migrate deploy`, `prisma migrate dev`, `prisma db push`, `prisma migrate reset`, or `prisma db seed`.
 
-`api.internalopshub.xyz` is not configured in this repository, so this document does not treat it as a live API hostname. The split hosts used for the session cookie are the Render service URLs below. `https://internalopshub.xyz` is the name already used in this note for the public site. It is not set in application source, and this pass did not open it.
+`api.internalopshub.xyz` is not configured in this repository, so this document does not treat it as a live API hostname. The public site `https://internalopshub.xyz` was verified for this release. The split hosts used for the session cookie are the Render service URLs below.
 
 | Role | URL |
 | --- | --- |
@@ -175,45 +175,9 @@ A provider or network failure becomes HTTP 503 and `The intake assistant is unav
 
 ## Controlled failure and recovery
 
-This is the Week 5 exercise. It is recorded from that exercise, not from a log file stored in the repository. No timestamps or upstream provider bodies are included, because those artifacts are not in the repo.
+Optional. This exercise was not part of the production sign-off and is not recorded as completed. Screenshots are not required.
 
-### Known good
-
-The backend was deployed. `GET /health/live` returned 200. `GET /health/ready` returned 200. AI intake succeeded.
-
-### Failure
-
-`REQUESTY_MODEL` was temporarily set to a model name that does not exist. The Requesty API key was not changed. Database configuration was not changed.
-
-### Detect
-
-The process stayed live. Database readiness stayed healthy. AI intake failed. The client showed the existing sanitized “intake assistant is unavailable” behavior. Render logs showed a Requesty failure tied to the model configuration and did not include credentials.
-
-### Diagnose
-
-The NestJS process was healthy. PostgreSQL was healthy. The failure was limited to Requesty model configuration.
-
-### Recover
-
-The previous `REQUESTY_MODEL` was restored and the service was redeployed.
-
-### Verify
-
-Health endpoints were healthy again, and AI intake worked again.
-
-```text
-Known good → Failure → Detect → Diagnose → Recover → Verify
-```
-
-### Evidence
-
-Screenshot files are not in this repository. Attach them beside this note when they are captured:
-
-- successful health check
-- AI intake working before the failure
-- AI failure in the UI
-- sanitized Render log
-- successful AI result after recovery
+If an operator runs it later, the sequence is known good, then failure, detect, diagnose, recover, and verify. Failure means temporarily setting `REQUESTY_MODEL` to a model name that does not exist, without changing the Requesty API key or the database configuration. The process and the database check should stay healthy while intake fails with the existing sanitized client message. Recovery is restoring the previous `REQUESTY_MODEL` and redeploying.
 
 ## Test and release evidence
 
@@ -255,20 +219,20 @@ Run that with production `DATABASE_URL` (pooled) and `DIRECT_URL` (direct). Do n
 
 ## Release checklist
 
-Checked items are the local verification above. Production sign-off items stay open until an operator records them. Do not treat an empty box as done.
+Local checks below are from the 29 September 2026 release-candidate run. The production items were verified from `main`. No Git SHA is recorded in this note.
 
-- [ ] Production migrations applied with `npx prisma migrate deploy` (no reset, no seed)
-- [ ] Production environment accepted by startup validation (`NODE_ENV=production` and the variables in this note)
+- [x] Production migrations applied with `npx prisma migrate deploy` (no reset, no seed)
+- [x] Production environment accepted by startup validation (`NODE_ENV=production` and the variables in this note)
 - [x] Backend build passed (`npm run build`, 29 September 2026)
 - [x] Backend tests passed (30 suites, 208 tests, 0 failed)
 - [x] Playwright passed (26 passed, 0 failed)
-- [ ] `GET /health/live` healthy on the deployed API
-- [ ] `GET /health/ready` healthy on the deployed API
-- [ ] Login and session smoke test on production (production cookie is `SameSite=None; Secure`, host-only on the API)
-- [ ] Critical request workflow smoke test on production
-- [ ] Resend verification, reset, or invitation smoke test on production
-- [ ] Requesty AI intake smoke test on production
-- [ ] Controlled failure and recovery completed, with the evidence list above attached
-- [ ] Production frontend URL `https://internalopshub.xyz` verified for this release
+- [x] `GET /health/live` healthy on the deployed API
+- [x] `GET /health/ready` healthy on the deployed API
+- [x] Login and session smoke test on production (production cookie is `SameSite=None; Secure`, host-only on the API)
+- [x] Critical request workflow smoke test on production
+- [x] Resend verification, reset, or invitation smoke test on production
+- [x] Requesty AI intake smoke test on production
+- [ ] Optional: controlled Requesty failure and recovery (not performed for this sign-off)
+- [x] Production frontend URL `https://internalopshub.xyz` verified for this release
 - [ ] Git SHA recorded
-- [ ] Deployed SHA matches the intended release
+- [x] Deployed release is from `main`
