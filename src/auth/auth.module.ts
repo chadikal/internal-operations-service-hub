@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { NextFunction, Response } from 'express';
-import { AuthController, HealthController } from './auth.controller';
+import { AuthController } from './auth.controller';
 import { AuthResponseInterceptor } from './auth.interceptor';
 import { AuthService } from './auth.service';
 import { CsrfGuard } from './csrf.guard';
@@ -25,7 +25,7 @@ export class NoStoreAuthMiddleware implements NestMiddleware {
 }
 
 @Module({
-  controllers: [AuthController, HealthController],
+  controllers: [AuthController],
   providers: [
     AuthService,
     EmailSender,

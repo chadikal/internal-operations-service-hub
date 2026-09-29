@@ -154,12 +154,3 @@ export class AuthController {
     });
   }
 }
-
-@Controller()
-export class HealthController {
-  @Public()
-  @Get('health')
-  health() {
-    return { ok: true };
-  }
-}

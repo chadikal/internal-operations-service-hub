@@ -177,7 +177,7 @@ John can view his own request. John cannot view Chadi's request (**403**). Chadi
 
 ## Endpoints
 
-Request routes, `POST /ai/intake`, `GET /employees`, `GET /departments`, `GET /request-types`, `GET /department-templates`, `PATCH /departments/:id`, `DELETE /departments/:id`, `GET /admin/dashboard`, `GET /admin/employees`, and `GET /admin/requests` require a session cookie. State-changing calls also require `X-CSRF-Token`. `GET /health` is public.
+Request routes, `POST /ai/intake`, `GET /employees`, `GET /departments`, `GET /request-types`, `GET /department-templates`, `PATCH /departments/:id`, `DELETE /departments/:id`, `GET /admin/dashboard`, `GET /admin/employees`, and `GET /admin/requests` require a session cookie. State-changing calls also require `X-CSRF-Token`. `GET /health`, `GET /health/live`, and `GET /health/ready` are public.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -199,7 +199,9 @@ Request routes, `POST /ai/intake`, `GET /employees`, `GET /departments`, `GET /r
 | GET | `/request-types` | Request types for the caller’s company: id, departmentId, name, approvalPolicy. |
 | POST | `/departments/:departmentId/request-types` | Company Super Admin only. Body: `{ "name", "approvalPolicy" }` where policy is `NONE`, `DEPARTMENT_ADMIN`, or `SUPER_ADMIN`. Duplicate names in that department return **409**. |
 | PATCH | `/request-types/:id` | Company Super Admin only. Body may include `name` and/or `approvalPolicy`. Does not rewrite submitted requests. |
-| GET | `/health` | `{ "ok": true }`. |
+| GET | `/health` | Public liveness alias. `{ "status": "ok" }`. |
+| GET | `/health/live` | Public. Process is up. Does not check the database. `{ "status": "ok" }`. |
+| GET | `/health/ready` | Public. `{ "status": "ready" }` when PostgreSQL accepts `SELECT 1`. `{ "status": "not_ready" }` with **503** when it does not. |
 | POST | `/requests` | Create. Always `SUBMITTED`. Body: `{ "submittedBy": 2, "departmentId": 1, "requestTypeId": 1 }` plus optional `title` and `description`. `submittedBy` must match the signed-in account. `requestTypeId` must belong to that department in the caller’s company. The live type policy is stored as `capturedApprovalPolicy`. `NONE` stores approval state `NOT_REQUIRED`. `DEPARTMENT_ADMIN` and `SUPER_ADMIN` store `PENDING`. The client cannot supply the snapshot or the state. |
 | GET | `/requests/approvals` | Inbox for the caller. A row is included when approval is `PENDING` or the state is still null and the captured policy requires a decision. Department Admin sees captured `DEPARTMENT_ADMIN` requests in their department that they did not submit. Super Admin sees captured `SUPER_ADMIN` requests in their company that they did not submit. Other roles are **403**. |
 | POST | `/requests/:id/approval` | Body: `{ "decision": "APPROVED" }` or `{ "decision": "DENIED", "reason": "..." }`. One decision. Denial requires a reason. Records approver, role, and time. Does not change work status. Self, wrong department, and wrong role are **403**. Another company is **404**. A repeat decision is **409**. |
