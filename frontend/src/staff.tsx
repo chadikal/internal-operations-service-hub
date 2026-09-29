@@ -512,6 +512,7 @@ export function StaffRequestList({
   const [detail, setDetail] = useState<ServiceRequest | null>(null);
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [error, setError] = useState('');
+  const [actionError, setActionError] = useState('');
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const openRequestId = useRef<number | null>(null);
@@ -760,11 +761,17 @@ export function StaffRequestList({
           returnFocusId={`queue-request-${detail.id}`}
           onClose={() => {
             openRequestId.current = null;
+            setActionError('');
             setDetail(null);
             setHistory([]);
             setSelectedId(null);
           }}
         >
+          {actionError ? (
+            <div className="alert" role="alert">
+              {actionError}
+            </div>
+          ) : null}
           <AuthorizedRequestDetail
             request={detail}
             history={history}
@@ -775,16 +782,20 @@ export function StaffRequestList({
                 busy={busy}
                 onClaim={() => {
                   setBusy(true);
+                  setActionError('');
                   claimRequest(detail.id)
                     .then(() => refreshOpen(detail.id))
-                    .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Could not claim'))
+                    .catch((err: unknown) => setActionError(err instanceof Error ? err.message : 'Could not claim'))
                     .finally(() => setBusy(false));
                 }}
                 onTransition={(to) => {
                   setBusy(true);
+                  setActionError('');
                   transition(detail.id, to, user.id)
                     .then(() => refreshOpen(detail.id))
-                    .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Could not update status'))
+                    .catch((err: unknown) =>
+                      setActionError(err instanceof Error ? err.message : 'Could not update status'),
+                    )
                     .finally(() => setBusy(false));
                 }}
               />

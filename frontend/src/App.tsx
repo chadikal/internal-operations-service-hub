@@ -566,11 +566,17 @@ export default function App() {
         returnFocusId={formMode === 'intake' ? 'launch-ai-intake' : 'launch-new-request'}
         onClose={closeForm}
       >
+        {error ? (
+          <div className="alert" role="alert">
+            {error}
+          </div>
+        ) : null}
         {workspace}
       </FormOverlay>
     ) : null;
 
   function openForm(mode: 'create' | 'intake') {
+    setError('');
     setFormMode(mode);
     if (user?.role === 'SUPER_ADMIN') {
       goTo('my-requests', { form: mode });
@@ -585,6 +591,7 @@ export default function App() {
   }
 
   function closeForm() {
+    setError('');
     setFormMode(null);
     const url = new URL(window.location.href);
     url.searchParams.delete('form');
@@ -854,7 +861,7 @@ export default function App() {
     const adminView = view === 'home' ? 'dashboard' : view;
     return (
       <AdminShell user={user} view={adminView} busy={busy} onNavigate={goTo} onLogout={onLogout}>
-        {error ? (
+        {error && formMode === null ? (
           <div className="alert" role="alert">
             {error}
           </div>
@@ -933,7 +940,7 @@ export default function App() {
         }),
       }}
     >
-      {error ? (
+      {error && formMode === null ? (
         <div className="alert" role="alert">
           {error}
         </div>

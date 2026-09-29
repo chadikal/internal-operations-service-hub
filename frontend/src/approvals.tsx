@@ -63,6 +63,7 @@ export function ApprovalInbox({ urlSearch }: { urlSearch: string }) {
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [reason, setReason] = useState('');
   const [error, setError] = useState('');
+  const [decisionError, setDecisionError] = useState('');
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState(readApprovalStatus);
@@ -123,13 +124,13 @@ export function ApprovalInbox({ urlSearch }: { urlSearch: string }) {
   async function onDecide(decision: 'APPROVED' | 'DENIED') {
     if (!selected) return;
     setBusy(true);
-    setError('');
+    setDecisionError('');
     try {
       await decideApproval(selected.id, decision, decision === 'DENIED' ? reason : undefined);
       setReason('');
       await refresh();
     } catch (err: unknown) {
-      setError(err instanceof ApiError ? err.message : 'Could not record the decision');
+      setDecisionError(err instanceof ApiError ? err.message : 'Could not record the decision');
     } finally {
       setBusy(false);
     }
@@ -244,8 +245,16 @@ export function ApprovalInbox({ urlSearch }: { urlSearch: string }) {
         <FormOverlay
           title={`Request #${selected.id}`}
           returnFocusId={`approval-item-${selected.id}`}
-          onClose={() => setSelectedId(null)}
+          onClose={() => {
+            setDecisionError('');
+            setSelectedId(null);
+          }}
         >
+          {decisionError ? (
+            <div className="alert" role="alert">
+              {decisionError}
+            </div>
+          ) : null}
           <AuthorizedRequestDetail
             request={selected}
             history={history}

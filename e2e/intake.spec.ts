@@ -96,7 +96,8 @@ test.describe('Request intake', () => {
     await page.getByLabel('What do you need?').fill(updatedText);
     await page.getByRole('button', { name: 'Analyze' }).click();
 
-    await expect(page.getByRole('alert')).toContainText('unavailable');
+    await expect(page.getByTestId('form-overlay').getByRole('alert')).toContainText('unavailable');
+    await expect(page.getByRole('alert')).toHaveCount(1);
     await expect(page.getByRole('button', { name: 'Prepare a request' })).toHaveCount(0);
     await expect(
       page.getByText('This looks like a straightforward request, so troubleshooting is not needed.'),
