@@ -5,6 +5,7 @@
   "scripts": {
     "start": "nest start",
     "start:dev": "node scripts/start-dev.cjs",
+    "start:prod": "node dist/main.js",
     "build": "nest build",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "prisma db seed",

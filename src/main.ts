@@ -30,8 +30,10 @@ async function bootstrap() {
       transformOptions: { enableImplicitConversion: true },
     }),
   );
-  await app.listen(3000);
-  console.log('Listening on http://localhost:3000');
+  app.enableShutdownHooks();
+  const port = Number(process.env.PORT) || 3000;
+  await app.listen(port, '0.0.0.0');
+  console.log(`Listening on http://0.0.0.0:${port}`);
 }
 
 void bootstrap();
