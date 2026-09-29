@@ -4,9 +4,11 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { assertJwtSecret } from './auth/jwt-secret';
 import { allowedOrigins } from './auth/origin';
+import { assertRuntimeConfig } from './config/runtime-config';
 
 async function bootstrap() {
   try {
+    assertRuntimeConfig(process.env);
     assertJwtSecret(process.env.JWT_SECRET);
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);

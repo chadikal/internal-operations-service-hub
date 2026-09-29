@@ -1,10 +1,17 @@
 import { ForbiddenException } from '@nestjs/common';
 
+export function parseAuthOrigins(value: string | undefined): string[] {
+  return (
+    value
+      ?.split(',')
+      .map((origin) => origin.trim())
+      .filter((origin) => origin.length > 0) ?? []
+  );
+}
+
 export function allowedOrigins(): string[] {
-  const configured = process.env.AUTH_ORIGINS?.split(',')
-    .map((origin) => origin.trim())
-    .filter((origin) => origin.length > 0);
-  if (!configured || configured.length === 0) {
+  const configured = parseAuthOrigins(process.env.AUTH_ORIGINS);
+  if (configured.length === 0) {
     return ['http://localhost:5173'];
   }
   return configured;
