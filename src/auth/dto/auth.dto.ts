@@ -135,6 +135,14 @@ export class SignupDepartmentDto {
   requestTypes!: ConfirmedRequestTypeDto[];
 }
 
+export class SignupEmailAvailabilityDto {
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toLowerCase() : value))
+  @IsString()
+  @MinLength(1)
+  @MaxLength(254)
+  email!: string;
+}
+
 export class OpaqueTokenDto {
   @IsString()
   @MinLength(20)

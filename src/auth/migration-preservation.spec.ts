@@ -16,6 +16,16 @@ const AUTH_MIGRATION = 'prisma/migrations/20260922160000_add_authentication/migr
 const COMPANY_MIGRATION = 'prisma/migrations/20260924150000_add_company_boundary/migration.sql';
 const REQUEST_TYPES_MIGRATION = 'prisma/migrations/20260925233000_add_request_types/migration.sql';
 const APPROVAL_MIGRATION = 'prisma/migrations/20260926140000_add_approval_decisions/migration.sql';
+const MIGRATIONS_BEFORE_COMPANY = [...PRE_AUTH_MIGRATIONS, AUTH_MIGRATION];
+const MIGRATIONS_FROM_COMPANY = [
+  COMPANY_MIGRATION,
+  REQUEST_TYPES_MIGRATION,
+  APPROVAL_MIGRATION,
+  'prisma/migrations/20260926170000_add_request_submitted_at/migration.sql',
+  'prisma/migrations/20260927003000_add_password_reset/migration.sql',
+  'prisma/migrations/20260928170000_add_request_claimed_at/migration.sql',
+  'prisma/migrations/20260929133000_remove_empty_development_company/migration.sql',
+];
 
 type SqlRunner = {
   query: (queryText: string, values?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -551,6 +561,104 @@ describe('authentication migration preservation', () => {
         ]);
         const decisionCount = await scratch.query(`SELECT COUNT(*)::int AS count FROM "ApprovalDecision"`);
         expect(decisionCount.rows).toEqual([{ count: 0 }]);
+      },
+    );
+  });
+
+  it('leaves a freshly migrated database with no bootstrap company', async () => {
+    const sourceUrl = requireTestSourceUrl();
+    assertIsolatedDatabase(ISOLATED_DATABASE);
+    const admin = new pg.Client({ connectionString: sourceUrl });
+    await withScratchDatabase(
+      admin,
+      () => connectScratchClient(databaseUrlFor(sourceUrl, ISOLATED_DATABASE)),
+      async (scratch) => {
+        for (const migration of [...MIGRATIONS_BEFORE_COMPANY, ...MIGRATIONS_FROM_COMPANY]) {
+          await queryFile(scratch, migration);
+        }
+        const empty = await scratch.query(`SELECT COUNT(*)::int AS count FROM "Company"`);
+        expect(empty.rows).toEqual([{ count: 0 }]);
+      },
+    );
+  });
+
+  it('keeps a Development company that already owns departments and accounts', async () => {
+    const sourceUrl = requireTestSourceUrl();
+    assertIsolatedDatabase(ISOLATED_DATABASE);
+    const admin = new pg.Client({ connectionString: sourceUrl });
+    await withScratchDatabase(
+      admin,
+      () => connectScratchClient(databaseUrlFor(sourceUrl, ISOLATED_DATABASE)),
+      async (scratch) => {
+        for (const migration of MIGRATIONS_BEFORE_COMPANY) {
+          await queryFile(scratch, migration);
+        }
+        await scratch.query(`INSERT INTO "Department" (id, name) VALUES (4, 'Facilities')`);
+        await scratch.query(
+          `INSERT INTO "Employee" (id, name, "departmentId", "canHandle") VALUES (42, 'Preexisting Person', 4, true)`,
+        );
+        await scratch.query(
+          `INSERT INTO "Request"
+            (id, "submittedBy", "departmentId", "currentOwnerId", status, "statusUpdatedAt", title, description)
+           VALUES (100, 42, 4, NULL, 'SUBMITTED', $1, 'Keep this title', 'Keep this description')`,
+          [PRESERVED_AT],
+        );
+        for (const migration of MIGRATIONS_FROM_COMPANY) {
+          await queryFile(scratch, migration);
+        }
+        const preserved = await scratch.query(
+          `SELECT "Company".name, "Company".status::text AS status, "Employee".id AS "employeeId", "Employee".name AS "employeeName"
+           FROM "Company"
+           JOIN "Employee" ON "Employee"."companyId" = "Company".id
+           ORDER BY "Employee".id`,
+        );
+        expect(preserved.rows).toEqual([
+          {
+            name: 'Development',
+            status: 'ACTIVE',
+            employeeId: 42,
+            employeeName: 'Preexisting Person',
+          },
+        ]);
+      },
+    );
+  });
+
+  it('does not delete another Development company that has an account', async () => {
+    const sourceUrl = requireTestSourceUrl();
+    assertIsolatedDatabase(ISOLATED_DATABASE);
+    const admin = new pg.Client({ connectionString: sourceUrl });
+    const cleanup = MIGRATIONS_FROM_COMPANY[MIGRATIONS_FROM_COMPANY.length - 1];
+    await withScratchDatabase(
+      admin,
+      () => connectScratchClient(databaseUrlFor(sourceUrl, ISOLATED_DATABASE)),
+      async (scratch) => {
+        for (const migration of [...MIGRATIONS_BEFORE_COMPANY, ...MIGRATIONS_FROM_COMPANY.slice(0, -1)]) {
+          await queryFile(scratch, migration);
+        }
+        await scratch.query(
+          `INSERT INTO "Company" (name, status) VALUES ('Development', 'PENDING')`,
+        );
+        const created = await scratch.query(
+          `INSERT INTO "Company" (name, status) VALUES ('Development', 'ACTIVE') RETURNING id`,
+        );
+        const companyId = (created.rows[0] as { id: number }).id;
+        await scratch.query(`INSERT INTO "Employee" (name, "companyId") VALUES ('Workspace Founder', $1)`, [
+          companyId,
+        ]);
+
+        await queryFile(scratch, cleanup);
+
+        const companies = await scratch.query(
+          `SELECT "Company".name, "Company".status::text AS status,
+                  (SELECT COUNT(*)::int FROM "Employee" WHERE "Employee"."companyId" = "Company".id) AS employees
+           FROM "Company"
+           ORDER BY "Company".id`,
+        );
+        expect(companies.rows).toEqual([
+          { name: 'Development', status: 'PENDING', employees: 0 },
+          { name: 'Development', status: 'ACTIVE', employees: 1 },
+        ]);
       },
     );
   });

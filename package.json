@@ -46,6 +46,7 @@
     "class-validator": "^0.14.2",
     "jsonwebtoken": "^9.0.3",
     "reflect-metadata": "^0.2.2",
+    "resend": "^6.30.0",
     "rxjs": "^7.8.2",
     "validator": "^13.15.35"
   },

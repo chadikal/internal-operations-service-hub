@@ -96,6 +96,16 @@ function syncUrl(role: string | undefined, view: AdminView | 'home') {
   }
 }
 
+function preparedInviteFeedback(total: number, failed: number): { tone: 'success' | 'error'; message: string } {
+  if (failed === 0) {
+    return { tone: 'success', message: 'Staff invitations sent.' };
+  }
+  if (failed === total) {
+    return { tone: 'error', message: 'Staff invitations could not be sent. You can retry them from Staff.' };
+  }
+  return { tone: 'error', message: 'Some staff invitations could not be sent. You can retry them from Staff.' };
+}
+
 export default function App() {
   const [departments, setDepartments] = useState<Department[]>([]);
   const [requestTypes, setRequestTypes] = useState<RequestType[]>([]);
@@ -117,6 +127,7 @@ export default function App() {
   const [gate, setGate] = useState<'login' | 'signup' | 'check-email' | 'forgot' | 'reset-sent'>('login');
   const [pendingEmail, setPendingEmail] = useState('');
   const [notice, setNotice] = useState('');
+  const [inviteFeedback, setInviteFeedback] = useState<{ tone: 'success' | 'error'; message: string } | null>(null);
   const [verifyToken, setVerifyToken] = useState(() => new URLSearchParams(window.location.search).get('verify'));
   const [inviteToken, setInviteToken] = useState(() => new URLSearchParams(window.location.search).get('invite'));
   const [resetToken, setResetToken] = useState(() => new URLSearchParams(window.location.search).get('reset'));
@@ -148,17 +159,19 @@ export default function App() {
     resetWorkspaceData();
     setView('home');
     setFormMode(null);
+    setInviteFeedback(null);
     syncUrl(undefined, 'home');
   }
 
   async function sendPreparedInvites(session: SessionUser) {
     if (session.role !== 'SUPER_ADMIN' || !session.email) return;
+    const generation = currentSessionGeneration();
     const email = session.email;
     const pending = takePendingInvites(email);
     if (pending.length === 0) return;
+    let failed: PendingInvite[] = [];
     try {
       const departments = await getDepartments();
-      const failed: PendingInvite[] = [];
       for (const invite of pending) {
         const department = departments.find(
           (item) => item.name.toLowerCase() === invite.departmentName.toLowerCase(),
@@ -176,22 +189,26 @@ export default function App() {
             canHandle: storedCanHandle(invite.role, invite.canHandle),
           });
         } catch (error) {
+          failed.push(invite);
           if (error instanceof StaleSessionResult || (error instanceof ApiError && error.status === 401)) {
-            failed.push(invite);
+            failed.push(...pending.slice(pending.indexOf(invite) + 1));
             break;
           }
-          failed.push(invite);
         }
       }
       if (failed.length > 0) savePendingInvites(email, failed);
     } catch {
+      failed = pending;
       savePendingInvites(email, pending);
     }
+    if (currentSessionGeneration() !== generation) return;
+    setInviteFeedback(preparedInviteFeedback(pending.length, failed.length));
   }
 
   function applySession(session: SessionUser, options?: { dashboard?: boolean }) {
     beginClientSession(session);
     resetWorkspaceData();
+    setInviteFeedback(null);
     setUser(session);
     void sendPreparedInvites(session);
     if (options?.dashboard) {
@@ -706,8 +723,10 @@ export default function App() {
                 setGate('login');
                 setError('');
               }}
-              onSubmit={(input) =>
-                run(async () => {
+              onSubmit={async (input) => {
+                setBusy(true);
+                setError('');
+                try {
                   const result = await signupCompany(
                     input.companyName,
                     input.name,
@@ -718,8 +737,17 @@ export default function App() {
                   savePendingInvites(result.email, input.invitations);
                   setPendingEmail(result.email);
                   setGate('check-email');
-                })
-              }
+                } catch (err) {
+                  if (err instanceof ApiError && err.status === 409) {
+                    throw err;
+                  }
+                  if (!(err instanceof StaleSessionResult)) {
+                    setError(err instanceof Error ? err.message : 'Request failed');
+                  }
+                } finally {
+                  setBusy(false);
+                }
+              }}
             />
           </>
         ) : null}
@@ -784,6 +812,7 @@ export default function App() {
                 value={password}
                 onChange={setPassword}
                 autoComplete="current-password"
+                required
               />
               <button
                 className="link-button"
@@ -829,6 +858,17 @@ export default function App() {
           <div className="alert" role="alert">
             {error}
           </div>
+        ) : null}
+        {inviteFeedback ? (
+          inviteFeedback.tone === 'success' ? (
+            <p className="notice" role="status">
+              {inviteFeedback.message}
+            </p>
+          ) : (
+            <div className="alert" role="alert">
+              {inviteFeedback.message}
+            </div>
+          )
         ) : null}
         {adminView === 'dashboard' ? (
           <DashboardPage

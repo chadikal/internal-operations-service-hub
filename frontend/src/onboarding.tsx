@@ -1,5 +1,6 @@
 import { FormEvent, useState } from 'react';
 import { PasswordField } from './password-field';
+import { canSubmitNewPassword, confirmPasswordError, shortPasswordError } from './password-rules';
 import { ApiError, Department, inviteStaff, StaleSessionResult } from './api';
 import { storedCanHandle } from './roles';
 
@@ -51,15 +52,10 @@ export function AcceptInviteForm({
 }) {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [formError, setFormError] = useState('');
 
   function onForm(event: FormEvent) {
     event.preventDefault();
-    if (password !== confirmPassword) {
-      setFormError('New password and confirm password must match.');
-      return;
-    }
-    setFormError('');
+    if (!canSubmitNewPassword(password, confirmPassword)) return;
     void onAccept(token, password);
   }
 
@@ -67,27 +63,22 @@ export function AcceptInviteForm({
     <section className="card">
       <h2>Set your password</h2>
       <p className="muted">Use the invitation from your company Super Admin. This page does not create a new company.</p>
-      {formError ? (
-        <div className="alert" role="alert">
-          {formError}
-        </div>
-      ) : null}
-      <form className="stack" onSubmit={onForm}>
+      <form className="stack" noValidate onSubmit={onForm}>
         <PasswordField
           label="New password"
           value={password}
           onChange={setPassword}
           autoComplete="new-password"
-          minLength={12}
+          error={shortPasswordError(password)}
         />
         <PasswordField
           label="Confirm password"
           value={confirmPassword}
           onChange={setConfirmPassword}
           autoComplete="new-password"
-          minLength={12}
+          error={confirmPasswordError(password, confirmPassword)}
         />
-        <button className="btn-primary" type="submit" disabled={busy}>
+        <button className="btn-primary" type="submit" disabled={busy || !canSubmitNewPassword(password, confirmPassword)}>
           Activate account
         </button>
       </form>
@@ -139,15 +130,10 @@ export function ResetPasswordForm({
 }) {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [formError, setFormError] = useState('');
 
   function onForm(event: FormEvent) {
     event.preventDefault();
-    if (password !== confirmPassword) {
-      setFormError('New password and confirm password must match.');
-      return;
-    }
-    setFormError('');
+    if (!canSubmitNewPassword(password, confirmPassword)) return;
     void onReset(token, password);
   }
 
@@ -155,27 +141,22 @@ export function ResetPasswordForm({
     <section className="card auth-card">
       <h2>Choose a new password</h2>
       <p className="muted">This link works once. After it is used, sign in with the new password.</p>
-      {formError ? (
-        <div className="alert" role="alert">
-          {formError}
-        </div>
-      ) : null}
-      <form className="stack" onSubmit={onForm}>
+      <form className="stack" noValidate onSubmit={onForm}>
         <PasswordField
           label="New password"
           value={password}
           onChange={setPassword}
           autoComplete="new-password"
-          minLength={12}
+          error={shortPasswordError(password)}
         />
         <PasswordField
           label="Confirm password"
           value={confirmPassword}
           onChange={setConfirmPassword}
           autoComplete="new-password"
-          minLength={12}
+          error={confirmPasswordError(password, confirmPassword)}
         />
-        <button className="btn-primary" type="submit" disabled={busy}>
+        <button className="btn-primary" type="submit" disabled={busy || !canSubmitNewPassword(password, confirmPassword)}>
           Update password
         </button>
       </form>

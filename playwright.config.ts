@@ -31,8 +31,11 @@ export default defineConfig({
       timeout: 120_000,
       env: {
         DATABASE_URL: databaseUrl,
+        DIRECT_URL: databaseUrl,
         AI_PROVIDER: 'mock',
         REQUESTY_API_KEY: '',
+        RESEND_API_KEY: '',
+        EMAIL_FROM: '',
         JWT_SECRET: 'test-only-jwt-secret-not-for-production-use',
         AUTH_ORIGINS: 'http://localhost:5173',
         NODE_ENV: 'test',

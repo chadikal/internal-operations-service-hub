@@ -8,6 +8,7 @@ import {
   closeTestApp,
   createTestApp,
   developmentCompanyId,
+  restoreDevelopmentRequestTypes,
   HR,
   HR_TYPE,
   IT,
@@ -33,10 +34,12 @@ describe('AI intake evals', () => {
 
   beforeEach(async () => {
     await cleanRequestData(prisma);
+    await restoreDevelopmentRequestTypes(prisma);
   });
 
   afterEach(async () => {
     await cleanRequestData(prisma);
+    await restoreDevelopmentRequestTypes(prisma);
   });
 
   afterAll(async () => {

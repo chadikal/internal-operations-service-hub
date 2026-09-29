@@ -15,6 +15,7 @@ function runPrisma(command) {
     env: {
       ...process.env,
       DATABASE_URL: databaseUrl,
+      DIRECT_URL: databaseUrl,
     },
   });
 

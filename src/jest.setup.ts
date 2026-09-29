@@ -9,5 +9,7 @@
 require('../scripts/load-test-env.cjs').loadTestEnv();
 process.env.AI_PROVIDER = 'mock';
 delete process.env.REQUESTY_API_KEY;
+delete process.env.RESEND_API_KEY;
+delete process.env.EMAIL_FROM;
 process.env.JWT_SECRET = 'test-only-jwt-secret-not-for-production-use';
 process.env.AUTH_ORIGINS = 'http://localhost:5173';

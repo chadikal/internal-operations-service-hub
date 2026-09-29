@@ -18,6 +18,7 @@ import {
   INVITATION_TTL_MS,
   PASSWORD_RESET_TTL_MS,
 } from './email-sender';
+import { invitationEmail, passwordResetEmail, verificationEmail } from './email-content';
 import { loginEmailKey, normalizeEmail } from './email';
 import { assertJwtSecret } from './jwt-secret';
 import { LoginRateLimiter, RateLimitError } from './login-rate-limit';
@@ -241,6 +242,23 @@ export class AuthService implements OnModuleInit {
     });
   }
 
+  async signupEmailAvailability(emailInput: string, ip: string): Promise<{ available: boolean }> {
+    try {
+      this.rateLimiter.noteProbe(ip);
+    } catch (error) {
+      if (error instanceof RateLimitError) {
+        throw new HttpException('Too many attempts. Try again later.', HttpStatus.TOO_MANY_REQUESTS);
+      }
+      throw error;
+    }
+    const email = normalizeEmail(emailInput);
+    const existing = await this.prisma.employee.findUnique({
+      where: { email },
+      select: { id: true },
+    });
+    return { available: existing === null };
+  }
+
   async signupCompany(input: {
     companyName: string;
     name: string;
@@ -307,11 +325,14 @@ export class AuthService implements OnModuleInit {
             expiresAt: new Date(now.getTime() + EMAIL_VERIFICATION_TTL_MS),
           },
         });
+        const verification = verificationEmail({
+          companyName,
+          verifyUrl: `${appLinkOrigin()}/?verify=${encodeURIComponent(rawToken)}`,
+        });
         await this.emailSender.send({
           to: email,
           purpose: 'email-verification',
-          subject: `Verify ${companyName}`,
-          text: `Verify your email to activate ${companyName}: ${appLinkOrigin()}/?verify=${rawToken}`,
+          ...verification,
           token: rawToken,
         });
       });
@@ -708,11 +729,14 @@ export class AuthService implements OnModuleInit {
             expiresAt: new Date(now.getTime() + INVITATION_TTL_MS),
           },
         });
+        const invitation = invitationEmail({
+          companyName: account.company.name,
+          inviteUrl: `${appLinkOrigin()}/?invite=${encodeURIComponent(rawToken)}`,
+        });
         await this.emailSender.send({
           to: email,
           purpose: 'invitation',
-          subject: `Join ${account.company.name}`,
-          text: `Set your password to join ${account.company.name}: ${appLinkOrigin()}/?invite=${rawToken}`,
+          ...invitation,
           token: rawToken,
         });
         return account;
@@ -804,11 +828,13 @@ export class AuthService implements OnModuleInit {
           expiresAt: new Date(now.getTime() + PASSWORD_RESET_TTL_MS),
         },
       });
+      const reset = passwordResetEmail({
+        resetUrl: `${appLinkOrigin()}/?reset=${encodeURIComponent(rawToken)}`,
+      });
       await this.emailSender.send({
         to: email,
         purpose: 'password-reset',
-        subject: 'Reset your password',
-        text: `Reset your password: ${appLinkOrigin()}/?reset=${rawToken}`,
+        ...reset,
         token: rawToken,
       });
     });

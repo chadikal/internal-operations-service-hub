@@ -3,7 +3,8 @@ import { ServiceUnavailableException } from '@nestjs/common';
 import { mkdtemp, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { EmailSender } from './email-sender';
+import { EmailSender, canDeliverOutboundEmail, canUseResend } from './email-sender';
+import type { OutboundEmailTransport } from './email-sender';
 
 const DEVELOPMENT_URL = 'postgresql://postgres:secret@localhost:5432/operations_hub';
 const OTHER_URL = 'postgresql://postgres:secret@localhost:5432/operations_hub_test';
@@ -118,6 +119,62 @@ describe('development mail outbox', () => {
       } finally {
         logs.restore();
       }
+    }
+  });
+
+  it('sends through Resend when configured and does not print the token', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.DATABASE_URL = DEVELOPMENT_URL;
+    process.env.RESEND_API_KEY = 're_test_secret_value';
+    process.env.EMAIL_FROM = 'Internal Operations Service Hub <onboarding@resend.dev>';
+    const transport: OutboundEmailTransport = { send: jest.fn().mockResolvedValue(undefined) };
+    const logs = captureLogs();
+    const sender = new EmailSender(transport);
+    try {
+      await sender.send({
+        to: 'founder@example.test',
+        purpose: 'email-verification',
+        subject: 'Verify your workspace',
+        text: 'http://localhost:5173/?verify=hidden-verify-token',
+        html: '<a href="http://localhost:5173/?verify=hidden-verify-token">Verify</a>',
+        token: 'hidden-verify-token',
+      });
+      expect(transport.send).toHaveBeenCalledTimes(1);
+      expect(logs.lines()).toContain('Email accepted purpose=email-verification provider=resend');
+      expect(logs.lines()).not.toContain('hidden-verify-token');
+      expect(logs.lines()).not.toContain('re_test_secret_value');
+      expect(sender.list()).toHaveLength(0);
+    } finally {
+      logs.restore();
+      delete process.env.RESEND_API_KEY;
+      delete process.env.EMAIL_FROM;
+    }
+  });
+
+  it('keeps the test outbox when Resend variables are present', async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.DATABASE_URL = OTHER_URL;
+    process.env.RESEND_API_KEY = 're_test_secret_value';
+    process.env.EMAIL_FROM = 'Internal Operations Service Hub <onboarding@resend.dev>';
+    const transport: OutboundEmailTransport = { send: jest.fn().mockResolvedValue(undefined) };
+    const sender = new EmailSender(transport);
+    try {
+      expect(canUseResend('test', OTHER_URL)).toBe(false);
+      expect(canUseResend('production', OTHER_URL)).toBe(false);
+      expect(canDeliverOutboundEmail('production', DEVELOPMENT_URL)).toBe(true);
+      expect(canDeliverOutboundEmail('production', OTHER_URL)).toBe(false);
+      await sender.send({
+        to: 'founder@example.test',
+        purpose: 'password-reset',
+        subject: 'Reset your password',
+        text: 'http://localhost:5173/?reset=reset-token-value',
+        token: 'reset-token-value',
+      });
+      expect(transport.send).not.toHaveBeenCalled();
+      expect(sender.list()).toHaveLength(1);
+    } finally {
+      delete process.env.RESEND_API_KEY;
+      delete process.env.EMAIL_FROM;
     }
   });
 });

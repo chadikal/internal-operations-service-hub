@@ -16,6 +16,7 @@ import {
 import { workspaceRoleLabel } from './admin';
 import { policyName } from './department-manage';
 import { PasswordField } from './password-field';
+import { canSubmitNewPassword, confirmPasswordError, shortPasswordError } from './password-rules';
 
 type SettingsSection = 'profile' | 'security' | 'company' | 'department';
 
@@ -204,14 +205,7 @@ function SecuritySection({
     event.preventDefault();
     setError('');
     setMessage('');
-    if (newPassword.length < 12) {
-      setError('Password must be at least 12 characters.');
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      setError('Passwords do not match');
-      return;
-    }
+    if (!canSubmitNewPassword(newPassword, confirmPassword)) return;
     setBusy(true);
     try {
       await changePassword({ currentPassword, newPassword, confirmPassword });
@@ -243,7 +237,7 @@ function SecuritySection({
           {message}
         </p>
       ) : null}
-      <form className="stack" onSubmit={(event) => void save(event)}>
+      <form className="stack" noValidate onSubmit={(event) => void save(event)}>
         <PasswordField
           label="Current password"
           value={currentPassword}
@@ -255,16 +249,20 @@ function SecuritySection({
           value={newPassword}
           onChange={setNewPassword}
           autoComplete="new-password"
-          minLength={12}
+          error={shortPasswordError(newPassword)}
         />
         <PasswordField
           label="Confirm new password"
           value={confirmPassword}
           onChange={setConfirmPassword}
           autoComplete="new-password"
-          minLength={12}
+          error={confirmPasswordError(newPassword, confirmPassword)}
         />
-        <button className="btn-primary" type="submit" disabled={busy}>
+        <button
+          className="btn-primary"
+          type="submit"
+          disabled={busy || currentPassword.length === 0 || !canSubmitNewPassword(newPassword, confirmPassword)}
+        >
           Change password
         </button>
       </form>

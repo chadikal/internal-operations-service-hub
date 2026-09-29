@@ -334,13 +334,20 @@ button:disabled {
   background: #eef4f8;
 }
 
-.alert {
+.alert,
+.field-error {
   background: #fdecea;
   color: #8a1f11;
   border: 1px solid #f5c6c2;
   border-radius: 8px;
   padding: 12px 14px;
   margin-bottom: 16px;
+}
+
+.field-error {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 0.85rem;
 }
 
 .details {

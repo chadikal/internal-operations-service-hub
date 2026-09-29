@@ -38,12 +38,13 @@ ADR-003 remains the onboarding decision: a founder verifies email before the com
 
 ### Mail and password reset
 
-There is no production mail provider. Signup, invitations, and password reset call the same delivery check before they write records. When that check fails, the API returns **503** and creates nothing. That includes an unknown email: the generic acknowledgement is returned only when delivery is allowed.
+Signup, invitations, and password reset call the same delivery check before they write records. When that check fails, the API returns **503** and creates nothing. That includes an unknown email: the generic acknowledgement is returned only when delivery is allowed.
 
-Delivery is allowed in two cases only:
+Delivery is allowed when:
 
-- `NODE_ENV` is exactly `development` and the database name is exactly `operations_hub`. The API prints the verification, invitation, or reset link in the API terminal. It does not write a token file.
-- `NODE_ENV` is exactly `test` and the database name is exactly `operations_hub_test`. Tests read the token from the in-process outbox, or from the file named by `TEST_EMAIL_OUTBOX`. There is no HTTP route that returns a token.
+- `RESEND_API_KEY` and `EMAIL_FROM` are both set, `NODE_ENV` is not `test`, and the database is not `operations_hub_test`. The API sends through Resend and does not print the token.
+- `NODE_ENV` is exactly `development`, the database name is exactly `operations_hub`, and Resend is not configured. The API prints the verification, invitation, or reset link in the API terminal. It does not write a token file.
+- `NODE_ENV` is exactly `test` and the database name is exactly `operations_hub_test`. Tests read the token from the in-process outbox, or from the file named by `TEST_EMAIL_OUTBOX`. There is no HTTP route that returns a token. Tests do not call Resend.
 
 No other database or environment logs the link or writes a token file.
 
@@ -91,7 +92,7 @@ Cards show a total on the left and a breakdown on the right. A figure is a link 
 
 ## Consequences
 
-- Production signup, invitations, and password reset fail until a mail provider is chosen. That is not production onboarding.
+- Production signup, invitations, and password reset fail until `RESEND_API_KEY` and `EMAIL_FROM` are set. The verified sending domain is still deferred.
 - Local development on `operations_hub` can complete verification, invitation, and reset by opening the printed link.
 - Claimed by Me is not a second product list beyond the owner’s unfinished requests.
 - The only-Super-Admin `SUPER_ADMIN` submission stays pending. What else should happen is still an open product question. The code does not approve it automatically.
@@ -100,7 +101,7 @@ Cards show a total on the left and a breakdown on the right. A figure is a link 
 
 These are not decided by this ADR:
 
-- Which mail provider to use in production.
+- Which verified domain production `EMAIL_FROM` will use. Resend is the provider.
 - Whether invitation lifetime, resend, or cancellation should differ from the seven-day assumption in ADR-003.
 - Whether one person may belong to more than one company, and whether company names must be unique.
 - Whether title and description are required.

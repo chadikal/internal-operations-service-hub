@@ -12,6 +12,7 @@ import { AuthResponseInterceptor } from './auth.interceptor';
 import { AuthService } from './auth.service';
 import { CsrfGuard } from './csrf.guard';
 import { EmailSender } from './email-sender';
+import { ResendEmailProvider } from './resend-email.provider';
 import { LoginRateLimiter } from './login-rate-limit';
 import { SessionGuard } from './session.guard';
 
@@ -28,6 +29,7 @@ export class NoStoreAuthMiddleware implements NestMiddleware {
   providers: [
     AuthService,
     EmailSender,
+    ResendEmailProvider,
     LoginRateLimiter,
     NoStoreAuthMiddleware,
     { provide: APP_GUARD, useClass: SessionGuard },

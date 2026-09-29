@@ -59,10 +59,15 @@ test.describe('Dashboard layout and request detail', () => {
     await expect(page.getByRole('button', { name: 'Change password' })).toBeVisible();
     await page.getByLabel('Current password').fill('wrong-current-password');
     await page.getByLabel('New password', { exact: true }).fill('replacement-password-12');
+    await expect(page.getByText("Passwords don't match.")).toHaveCount(0);
     await page.getByLabel('Confirm new password').fill('other-password-ok-12');
-    await page.getByRole('button', { name: 'Change password' }).click();
-    await expect(page.getByRole('alert')).toContainText('Passwords do not match');
+    await expect(page.getByText("Passwords don't match.")).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Change password' })).toBeDisabled();
+    await page.getByLabel('New password', { exact: true }).fill('replacement-password-12x');
+    await expect(page.getByText("Passwords don't match.")).toBeVisible();
+    await page.getByLabel('New password', { exact: true }).fill('replacement-password-12');
     await page.getByLabel('Confirm new password').fill('replacement-password-12');
+    await expect(page.getByText("Passwords don't match.")).toHaveCount(0);
     await page.getByRole('button', { name: 'Change password' }).click();
     await expect(page.getByRole('alert')).toContainText('Current password is incorrect');
     await employeeNav.getByRole('link', { name: 'Dashboard' }).click();

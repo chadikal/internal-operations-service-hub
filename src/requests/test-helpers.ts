@@ -42,6 +42,15 @@ export async function ensureTestCredentials(prisma: PrismaService) {
   await credentialsReady;
 }
 
+export async function restoreDevelopmentRequestTypes(prisma: PrismaService) {
+  assertTestDatabase(process.env.DATABASE_URL);
+  const companyId = await developmentCompanyId(prisma);
+  await ensureDevelopmentRequestTypes(prisma);
+  await prisma.requestType.deleteMany({
+    where: { companyId, id: { notIn: [IT_TYPE, HR_TYPE, FINANCE_TYPE] } },
+  });
+}
+
 export async function ensureDevelopmentRequestTypes(prisma: PrismaService) {
   const companyId = await developmentCompanyId(prisma);
   const defaults: Array<{ id: number; departmentId: number; name: string }> = [

@@ -21,6 +21,7 @@ import {
   OpaqueTokenDto,
   ResetPasswordDto,
   SignupCompanyDto,
+  SignupEmailAvailabilityDto,
   UpdateCompanyDto,
   UpdateProfileDto,
 } from './dto/auth.dto';
@@ -99,6 +100,17 @@ export class AuthController {
   signup(@Req() request: AuthenticatedRequest, @Body() dto: SignupCompanyDto) {
     assertTrustedOrigin(request.header('origin'));
     return this.authService.signupCompany(dto);
+  }
+
+  @Public()
+  @Post('signup/email-availability')
+  @HttpCode(200)
+  signupEmailAvailability(
+    @Req() request: AuthenticatedRequest,
+    @Body() dto: SignupEmailAvailabilityDto,
+  ) {
+    assertTrustedOrigin(request.header('origin'));
+    return this.authService.signupEmailAvailability(dto.email, clientIp(request));
   }
 
   @Public()

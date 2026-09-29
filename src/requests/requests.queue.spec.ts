@@ -14,6 +14,7 @@ import {
   IT_TYPE,
   JOHN,
   removeNonDevelopmentCompanies,
+  restoreDevelopmentRequestTypes,
   sessionCookieFrom,
   TEST_ORIGIN,
   TEST_PASSWORD,
@@ -36,6 +37,7 @@ describe('Role request queues', () => {
 
   afterEach(async () => {
     await cleanRequestData(prisma);
+    await restoreDevelopmentRequestTypes(prisma);
     if (createdAccountIds.length > 0) {
       await prisma.session.deleteMany({ where: { accountId: { in: createdAccountIds } } });
       await prisma.employee.deleteMany({ where: { id: { in: createdAccountIds } } });

@@ -360,6 +360,13 @@ export function transition(id: number, to: 'IN_PROGRESS' | 'COMPLETED', changedB
   });
 }
 
+export function signupEmailAvailable(email: string) {
+  return send<{ available: boolean }>('/auth/signup/email-availability', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
+}
+
 export function signupCompany(
   companyName: string,
   name: string,

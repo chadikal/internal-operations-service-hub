@@ -33,12 +33,31 @@ type Bucket = {
 export class LoginRateLimiter {
   private readonly emailBuckets = new Map<string, Bucket>();
   private readonly ipBuckets = new Map<string, Bucket>();
+  private readonly probeBuckets = new Map<string, Bucket>();
 
   constructor(private readonly maxBuckets = MAX_TRACKED_BUCKETS) {}
 
   reset(): void {
     this.emailBuckets.clear();
     this.ipBuckets.clear();
+    this.probeBuckets.clear();
+  }
+
+  noteProbe(ip: string, now = Date.now()): void {
+    this.pruneStore(this.probeBuckets, now);
+    const existing = this.probeBuckets.get(ip);
+    const count = existing && !this.windowExpired(existing, now) ? existing.failures : 0;
+    if (count >= this.ipLimit()) {
+      throw new RateLimitError();
+    }
+    if (!existing || this.windowExpired(existing, now)) {
+      if (!this.probeBuckets.has(ip) && this.probeBuckets.size >= this.maxBuckets) {
+        throw new RateLimitError();
+      }
+      this.probeBuckets.set(ip, { windowStartedAt: now, failures: 1, inFlight: 0 });
+      return;
+    }
+    existing.failures += 1;
   }
 
   snapshot(): { emails: string[]; ips: string[] } {

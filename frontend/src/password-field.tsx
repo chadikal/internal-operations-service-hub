@@ -5,15 +5,18 @@ export function PasswordField({
   value,
   onChange,
   autoComplete,
-  minLength,
+  error = '',
+  required = false,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   autoComplete: 'current-password' | 'new-password';
-  minLength?: number;
+  error?: string;
+  required?: boolean;
 }) {
   const id = useId();
+  const errorId = useId();
   const [visible, setVisible] = useState(false);
 
   return (
@@ -26,8 +29,9 @@ export function PasswordField({
           value={value}
           onChange={(event) => onChange(event.target.value)}
           autoComplete={autoComplete}
-          minLength={minLength}
-          required
+          required={required}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? errorId : undefined}
         />
         <button
           className="password-toggle icon-button"
@@ -40,6 +44,11 @@ export function PasswordField({
           <EyeIcon open={visible} />
         </button>
       </div>
+      {error ? (
+        <p className="field-error" id={errorId} role="alert">
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }

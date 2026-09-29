@@ -57,10 +57,15 @@ test.describe('Password reset', () => {
     const reset = await outboxMessage(email, 'password-reset');
     await page.goto(`/?reset=${reset.token}`);
     await page.getByLabel('New password').fill(NEW_PASSWORD);
+    await expect(page.getByText("Passwords don't match.")).toHaveCount(0);
     await page.getByLabel('Confirm password').fill('different-password-value');
-    await page.getByRole('button', { name: 'Update password' }).click();
-    await expect(page.getByRole('alert')).toContainText('must match');
+    await expect(page.getByText("Passwords don't match.")).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Update password' })).toBeDisabled();
+    await page.getByLabel('New password').fill(`${NEW_PASSWORD}x`);
+    await expect(page.getByText("Passwords don't match.")).toBeVisible();
+    await page.getByLabel('New password').fill(NEW_PASSWORD);
     await page.getByLabel('Confirm password').fill(NEW_PASSWORD);
+    await expect(page.getByText("Passwords don't match.")).toHaveCount(0);
     await page.getByRole('button', { name: 'Update password' }).click();
     await expect(page.getByRole('heading', { name: 'Log in' })).toBeVisible();
     await expect(page.getByRole('status')).toContainText('Password updated');

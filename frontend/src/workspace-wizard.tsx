@@ -4,7 +4,15 @@ import {
   CatalogTemplate,
   TemplatePolicy,
 } from '../../src/auth/department-template-catalog.ts';
+import { ApiError, signupEmailAvailable } from './api';
 import { PasswordField } from './password-field';
+import {
+  EMAIL_INVALID,
+  EMAIL_IN_USE,
+  MIN_PASSWORD_LENGTH,
+  confirmPasswordError,
+  shortPasswordError,
+} from './password-rules';
 import { storedCanHandle } from './roles';
 import { PendingInvite } from './pending-invites';
 
@@ -83,7 +91,7 @@ export function WorkspaceWizard({
     password: string;
     departments: SignupDepartment[];
     invitations: PendingInvite[];
-  }) => void;
+  }) => Promise<void>;
   onLeave: () => void;
 }) {
   const [step, setStep] = useState(0);
@@ -95,13 +103,27 @@ export function WorkspaceWizard({
   const [departments, setDepartments] = useState<DraftDepartment[]>(defaultDepartments);
   const [invitations, setInvitations] = useState<DraftInvite[]>([]);
   const [formError, setFormError] = useState('');
+  const [companyTouched, setCompanyTouched] = useState(false);
+  const [nameTouched, setNameTouched] = useState(false);
+  const [emailTouched, setEmailTouched] = useState(false);
+  const [takenEmail, setTakenEmail] = useState('');
+  const [checkingEmail, setCheckingEmail] = useState(false);
 
+  const emailKey = email.trim().toLowerCase();
+  const emailTaken = takenEmail !== '' && takenEmail === emailKey;
+  const passwordError = shortPasswordError(password);
+  const confirmError = confirmPasswordError(password, confirmPassword);
+  const emailFormatError = emailTouched && email.trim().length > 0 && !validEmail(email) ? EMAIL_INVALID : '';
+  const emailError = emailTaken ? EMAIL_IN_USE : emailFormatError;
   const companyReady =
     companyName.trim().length > 0 &&
     name.trim().length > 0 &&
     validEmail(email) &&
-    password.length >= 12 &&
-    password === confirmPassword;
+    password.length >= MIN_PASSWORD_LENGTH &&
+    confirmPassword.length > 0 &&
+    password === confirmPassword &&
+    !emailTaken &&
+    !checkingEmail;
   const departmentError = departmentProblems(departments);
   const inviteError = invitationProblems(invitations, departments);
 
@@ -120,10 +142,25 @@ export function WorkspaceWizard({
     setStep((current) => current - 1);
   }
 
-  function next() {
-    if (step === 0 && !companyReady) {
-      setFormError(companyMessage());
-      return;
+  async function next() {
+    if (step === 0) {
+      setCompanyTouched(true);
+      setNameTouched(true);
+      setEmailTouched(true);
+      if (!companyReady) return;
+      setCheckingEmail(true);
+      try {
+        const result = await signupEmailAvailable(email.trim());
+        if (!result.available) {
+          setTakenEmail(emailKey);
+          return;
+        }
+      } catch {
+        setFormError('Could not check that email. Try again.');
+        return;
+      } finally {
+        setCheckingEmail(false);
+      }
     }
     if (step === 1 && departmentError) {
       setFormError(departmentError);
@@ -133,23 +170,15 @@ export function WorkspaceWizard({
     setStep((current) => current + 1);
   }
 
-  function companyMessage() {
-    if (companyName.trim().length === 0) return 'Company name is required.';
-    if (name.trim().length === 0) return 'Your name is required.';
-    if (!validEmail(email)) return 'A valid email is required.';
-    if (password.length < 12) return 'Password must be at least 12 characters.';
-    if (password !== confirmPassword) return 'Password and confirm password must match.';
-    return '';
-  }
-
-  function finish(event: FormEvent) {
+  async function finish(event: FormEvent) {
     event.preventDefault();
     if (inviteError) {
       setFormError(inviteError);
       return;
     }
     setFormError('');
-    onSubmit({
+    try {
+      await onSubmit({
       companyName: companyName.trim(),
       name: name.trim(),
       email: email.trim(),
@@ -169,6 +198,13 @@ export function WorkspaceWizard({
         canHandle: storedCanHandle(invite.role, invite.canHandle),
       })),
     });
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        setTakenEmail(emailKey);
+        setStep(0);
+        return;
+      }
+    }
   }
 
   return (
@@ -193,29 +229,67 @@ export function WorkspaceWizard({
         </div>
       ) : null}
       {step === 0 ? (
-        <form className="stack" onSubmit={(event) => event.preventDefault()}>
+        <form className="stack" noValidate onSubmit={(event) => event.preventDefault()}>
           <label>
             Company name
-            <input value={companyName} onChange={(event) => setCompanyName(event.target.value)} required maxLength={200} />
+            <input
+              value={companyName}
+              onChange={(event) => setCompanyName(event.target.value)}
+              onBlur={() => setCompanyTouched(true)}
+              maxLength={200}
+            />
+            {companyTouched && companyName.trim().length === 0 ? (
+              <span className="field-error" role="alert">
+                Company name is required.
+              </span>
+            ) : null}
           </label>
           <label>
             Your name
-            <input value={name} onChange={(event) => setName(event.target.value)} required maxLength={200} />
+            <input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              onBlur={() => setNameTouched(true)}
+              maxLength={200}
+            />
+            {nameTouched && name.trim().length === 0 ? (
+              <span className="field-error" role="alert">
+                Your name is required.
+              </span>
+            ) : null}
           </label>
           <label>
             Email
-            <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" required />
+            <input
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              onBlur={() => setEmailTouched(true)}
+              autoComplete="username"
+              aria-invalid={emailError ? true : undefined}
+            />
+            {emailError ? (
+              <span className="field-error" role="alert">
+                {emailError}
+              </span>
+            ) : null}
           </label>
-          <PasswordField label="Password" value={password} onChange={setPassword} autoComplete="new-password" minLength={12} />
+          <PasswordField
+            label="Password"
+            value={password}
+            onChange={setPassword}
+            autoComplete="new-password"
+            error={passwordError}
+          />
           <PasswordField
             label="Confirm password"
             value={confirmPassword}
             onChange={setConfirmPassword}
             autoComplete="new-password"
-            minLength={12}
+            error={confirmError}
           />
           <div className="wizard-actions">
-            <button className="btn-primary" type="button" disabled={!companyReady} onClick={next}>
+            <button className="btn-primary" type="button" disabled={!companyReady} onClick={() => void next()}>
               Next
             </button>
           </div>
@@ -439,7 +513,7 @@ function StaffStep({
 }) {
   return (
     <form className="stack" onSubmit={onFinish}>
-      <p className="muted">Inviting staff is optional. Invitations are sent after you verify your email and sign in.</p>
+      <p className="muted">Invitations will be sent after you verify your workspace.</p>
       {invitations.map((invite) => (
         <article className="wizard-block" key={invite.key}>
           <div className="wizard-row">

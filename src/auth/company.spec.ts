@@ -531,6 +531,50 @@ describe('company signup', () => {
     ).toEqual([...DEFAULT_COMPANY_DEPARTMENTS].sort());
   });
 
+  it('reports signup email availability without account details and still rejects a duplicate signup', async () => {
+    const email = 'availability.founder@operations-hub.test';
+    const open = await request(app.getHttpServer())
+      .post('/auth/signup/email-availability')
+      .set('Origin', TEST_ORIGIN)
+      .send({ email });
+    expect(open.status).toBe(200);
+    expect(open.body).toEqual({ available: true });
+
+    const created = await signup(app, {
+      companyName: 'Availability Co',
+      name: 'Ava Founder',
+      email,
+      password: PASSWORD,
+    });
+    expect(created.status).toBe(201);
+
+    const taken = await request(app.getHttpServer())
+      .post('/auth/signup/email-availability')
+      .set('Origin', TEST_ORIGIN)
+      .send({ email: '  Availability.Founder@operations-hub.test  ' });
+    expect(taken.status).toBe(200);
+    expect(taken.body).toEqual({ available: false });
+    expect(JSON.stringify(taken.body)).not.toContain('Ava Founder');
+    expect(JSON.stringify(taken.body)).not.toContain('Availability Co');
+    expect(JSON.stringify(taken.body)).not.toContain('passwordHash');
+
+    const duplicate = await signup(app, {
+      companyName: 'Availability Co Again',
+      name: 'Someone Else',
+      email,
+      password: PASSWORD,
+    });
+    expect(duplicate.status).toBe(409);
+    expect(duplicate.body.message).toBe('An account with this email already exists');
+    expect(JSON.stringify(duplicate.body)).not.toContain('passwordHash');
+
+    const invalid = await request(app.getHttpServer())
+      .post('/auth/signup/email-availability')
+      .set('Origin', TEST_ORIGIN)
+      .send({ email: 'not-an-email' });
+    expect(invalid.status).toBe(400);
+  });
+
   it('persists only the departments and request types the founder confirmed', async () => {
     const created = await signup(app, {
       companyName: 'Chosen Desk',
@@ -838,6 +882,11 @@ describe('company signup', () => {
   });
 
   it('logs outbound mail only for the development database', () => {
+    const previousKey = process.env.RESEND_API_KEY;
+    const previousFrom = process.env.EMAIL_FROM;
+    delete process.env.RESEND_API_KEY;
+    delete process.env.EMAIL_FROM;
+    try {
     expect(shouldLogOutboundEmail('development', 'postgresql://postgres:secret@localhost:5432/operations_hub')).toBe(
       true,
     );
@@ -863,6 +912,12 @@ describe('company signup', () => {
       testEmailOutboxPath('production', process.env.DATABASE_URL, 'C:\\tmp\\email-outbox.jsonl'),
     ).toBeUndefined();
     expect(testEmailOutboxPath('test', process.env.DATABASE_URL, '  ')).toBeUndefined();
+    } finally {
+      if (previousKey === undefined) delete process.env.RESEND_API_KEY;
+      else process.env.RESEND_API_KEY = previousKey;
+      if (previousFrom === undefined) delete process.env.EMAIL_FROM;
+      else process.env.EMAIL_FROM = previousFrom;
+    }
   });
 
   it('rejects production signup and invitations before creating records', async () => {

@@ -74,8 +74,11 @@ Create a database named `operations_hub`. Copy `.env.example` to `.env` and set 
 
 ```env
 DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@localhost:5432/operations_hub"
+DIRECT_URL="postgresql://postgres:YOUR_PASSWORD@localhost:5432/operations_hub"
 JWT_SECRET=
 AUTH_ORIGINS=http://localhost:5173
+RESEND_API_KEY=
+EMAIL_FROM=Internal Operations Service Hub <onboarding@resend.dev>
 AI_PROVIDER=requesty
 REQUESTY_MODEL=mistral/leanstral-1-5
 REQUESTY_API_KEY=
@@ -89,7 +92,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 
 If the password contains `#`, `@`, or `%`, URL-encode those characters (`#` → `%23`).
 
-`REQUESTY_API_KEY` is used only by the NestJS API. Do not put it in frontend env files. Automated tests ignore Requesty and force `AI_PROVIDER=mock`. They also set their own test-only `JWT_SECRET`.
+`REQUESTY_API_KEY` and `RESEND_API_KEY` are used only by the NestJS API. Do not put either key in frontend env files. Automated tests ignore Requesty and force `AI_PROVIDER=mock`. They also delete `RESEND_API_KEY` and set their own test-only `JWT_SECRET`.
 
 The intake client waits 90 seconds and does not retry a timeout. A **503** whose log says `httpStatus=none` means Requesty did not finish; that is not an invalid JSON result. A **502** means a finished response failed intake validation. The default model is `mistral/leanstral-1-5`, the free Requesty model that supports JSON schema. Requests omit `temperature` because this model rejects greedy sampling (`temperature: 0`) with HTTP 400. Eight repeated intake calls on 25 Sep 2026 all returned HTTP 200 and valid intake JSON in 1.1–4.0 seconds. `gemma-4-31b-it` does not support JSON schema and can sit for the full 90 seconds with no HTTP status; paid schema models returned HTTP 402 because the organization balance is too low. The 90-second ceiling is unchanged.
 
@@ -101,14 +104,22 @@ On 26 September 2026, `scripts/live-intake-type-eval.ts` sent one Requesty compl
 
 The script still expects Software for the failing VPN client. That exact-type case failed. The expected type was left in place. Mock evals still select the company’s software-named type for a clear malfunction. When the live draft leaves the type empty, the employee chooses one before Create Request is enabled. Remaining limitation: this model does not reliably select the software-named type for a failing existing connection, so the exact-type live check still fails.
 
-Apply migrations on `operations_hub`. This does not reset the database. Nest does not seed on start, and seed does not set passwords.
+Apply migrations on `operations_hub`. This does not reset the database. Nest does not seed on start, and seed does not set passwords. Locally `DIRECT_URL` is the same URL as `DATABASE_URL`. Prisma Client connects with `DATABASE_URL`. `prisma migrate deploy` connects with `DIRECT_URL`.
 
 ```powershell
 npx prisma migrate deploy
 npx prisma db seed
 ```
 
-Create a company from the sign-in page: company name, your name, email, and a password of at least 12 characters. Verify the email before the workspace is active. Signup creates IT, HR, and Finance for that company. `npm run start:dev` sets `NODE_ENV` to `development` when it is unset. On the development database `operations_hub`, the API then prints the verification, invitation, or password-reset link in the API terminal. It does not log those links for tests, production, or any other database, and the HTTP response does not include the token. Production has no mail provider, so signup, invitations, and password reset fail there and create no records. That is not production onboarding. A reset link expires after one hour, works once, and signs out existing sessions for that account. An unknown email gets the same acknowledgement as a known one.
+Production uses Neon. Set `DATABASE_URL` to the pooled connection string and `DIRECT_URL` to the direct connection string in the environment that runs the command, then apply the existing migrations without seeding:
+
+```powershell
+npx prisma migrate deploy
+```
+
+Do not commit either Neon URL. Do not point `.env` or `.env.test` at Neon.
+
+Create a company from the sign-in page: company name, your name, email, and a password of at least 12 characters. Verify the email before the workspace is active. Signup creates IT, HR, and Finance for that company. `npm run start:dev` sets `NODE_ENV` to `development` when it is unset. Links use the first `AUTH_ORIGINS` entry. When `RESEND_API_KEY` and `EMAIL_FROM` are both set, verification, invitation, and password-reset mail goes through Resend and the API does not print the link. On the development database `operations_hub`, if either variable is blank, the API prints the link in the API terminal instead. It does not log those links for tests or for any other database, and the HTTP response does not include the token. Production without both Resend variables still fails signup, invitations, and password reset before creating records. A reset link expires after one hour, works once, and signs out existing sessions for that account. An unknown email gets the same acknowledgement as a known one.
 
 `npm run auth:create-super-admin` no longer creates an account.
 
