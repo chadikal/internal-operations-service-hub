@@ -12,7 +12,7 @@ The current slice is the Week 4 React + NestJS + PostgreSQL app, advisory Reques
 
 An employee signs in with email and password, then describes a need in free text. The API analyzes it with Requesty at runtime (`AI_PROVIDER=requesty`) and returns troubleshooting and/or a draft. Intake never creates a request; the employee reviews the draft and submits through Create Request. Automated tests and evals use `MockAiProvider`.
 
-A company Super Admin lands on a sidebar workspace: Dashboard, Requests, My Requests, Approvals, Staff, Departments, and Settings. After login the workspace opens on Dashboard. Requests is the filterable company-wide oversight list with ID, submitter, title, employee department, destination department, and status. My Requests lists only what that Super Admin submitted. New Request and AI Intake, from the dashboard or My Requests, open the existing form in a centered overlay on My Requests. Super Admin may submit and may open details/history for requests they submitted. Unrelated rows do not open description or history. Approvals opens captured Super Admin requests they did not submit. They cannot assign, claim, or change work status. Departments holds the company overview plus department creation, renaming, deletion, templates, and request-type editing. Settings is Profile, Security, Notifications, and a read-only Company section. Super Admin manages the company’s department structure and request types on Departments, not in Settings. A Department Admin can rename only their own department from Settings > My Department and can view its request types. Request-type configuration stays Super Admin-only. A Department Admin can claim work in their department without a separate handler flag, and can invite, edit, and remove only ordinary staff in that department. Staff removal deactivates the account and keeps its history. Handler and Employee settings stop at Profile, Security, and Notifications. Employee and Department Admin accounts do not get those pages by changing the URL or calling the Super Admin APIs.
+A company Super Admin lands on a sidebar workspace: Dashboard, Requests, My Requests, Approvals, Staff, Departments, and Settings. After login the workspace opens on Dashboard. Requests is the filterable company-wide oversight list with ID, submitter, title, employee department, destination department, and status. My Requests lists only what that Super Admin submitted. New Request and AI Intake, from the dashboard or My Requests, open the existing form in a centered overlay on My Requests. Super Admin may submit and may open details/history for requests they submitted. Unrelated rows do not open description or history. Approvals opens captured Super Admin requests they did not submit. They cannot assign, claim, or change work status. Departments holds the company overview plus department creation, renaming, deletion, templates, and request-type editing. Super Admin Settings is Profile, Security, and Company. Super Admin manages the company’s department structure and request types on Departments, not in Settings. A Department Admin’s Settings is Profile, Security, and My Department. A Department Admin can rename only their own department from Settings > My Department and can view its request types. Request-type configuration stays Super Admin-only. A Department Admin can claim work in their department without a separate handler flag, and can invite, edit, and remove only ordinary staff in that department. Staff removal deactivates the account and keeps its history. Employee and Handler settings are Profile and Security. Employee and Department Admin accounts do not get those pages by changing the URL or calling the Super Admin APIs.
 
 This is not the full application. Company-details screens and top-handler ranking are not implemented. Eligible handlers claim an unassigned request they can open when approval is `NOT_REQUIRED` or `APPROVED`. Their Requests page has Available, Claimed by Me, and Completed. My Requests is always what that person submitted. `PATCH /requests/:id/owner` no longer assigns another person. A company Super Admin can add, rename, or delete unused departments, review optional department templates, manage request types and each type’s approval policy, and invite staff from the workspace. New signup companies start with ordinary IT, HR, and Finance departments and no request types; those department names are not locked. Existing companies are not backfilled. Confirmed plans for the later work are in [Planned full product](#planned-full-product-not-implemented).
 
@@ -24,6 +24,19 @@ React/Vite UI (localhost:5173)
     → Prisma
       → PostgreSQL
 ```
+
+## Production
+
+Production hosting, configuration, health checks, and recovery are in [Week 5 production readiness](docs/week5-production-readiness.md).
+
+```
+Browser
+  → React/Vite on Render Static Site (https://internalopshub.xyz)
+    → NestJS API on a Render web service
+      → PostgreSQL on Neon
+```
+
+Resend sends transactional email. Requesty serves AI intake. `GET /health/live` is the process check for Render. `GET /health/ready` checks PostgreSQL. `GET /health` is the same liveness response as `/health/live`.
 
 Identity is an `HttpOnly` cookie named `hub_session`. The UI has Log in, Log out, and Create a New Workplace. Signup asks for the password twice. There is no public employee signup. Protected calls send `X-CSRF-Token`. `X-Actor-Id` is ignored. Each account belongs to one company, and the API will not return another company’s data.
 
@@ -43,7 +56,7 @@ Seeded people: Chadi (`id=1`, IT, `canHandle=true`), John (`id=2`, IT, `canHandl
 
 **Confirmed (planned):** Deactivation is rejected while the account owns unfinished work. Login already rejects a deactivated account. The unfinished-work check and a deactivation screen are not implemented.
 
-Release and reassignment, production email delivery, and deployment hosting are still open. Password reset is implemented and recorded in ADR-004. Do not treat the open items as decided.
+Release and reassignment are still open. Production hosting and mail are recorded in [Week 5 production readiness](docs/week5-production-readiness.md). Password reset is implemented and recorded in ADR-004. Do not treat the open items as decided.
 
 ## Development workflow
 
@@ -199,8 +212,8 @@ Request routes, `POST /ai/intake`, `GET /employees`, `GET /departments`, `GET /r
 | GET | `/request-types` | Request types for the caller’s company: id, departmentId, name, approvalPolicy. |
 | POST | `/departments/:departmentId/request-types` | Company Super Admin only. Body: `{ "name", "approvalPolicy" }` where policy is `NONE`, `DEPARTMENT_ADMIN`, or `SUPER_ADMIN`. Duplicate names in that department return **409**. |
 | PATCH | `/request-types/:id` | Company Super Admin only. Body may include `name` and/or `approvalPolicy`. Does not rewrite submitted requests. |
-| GET | `/health` | Public liveness alias. `{ "status": "ok" }`. |
-| GET | `/health/live` | Public. Process is up. Does not check the database. `{ "status": "ok" }`. |
+| GET | `/health` | Public liveness alias of `/health/live`. `{ "status": "ok" }`. |
+| GET | `/health/live` | Public. Process is up. Does not check the database. `{ "status": "ok" }`. Use this for the Render health check. See [Week 5 production readiness](docs/week5-production-readiness.md). |
 | GET | `/health/ready` | Public. `{ "status": "ready" }` when PostgreSQL accepts `SELECT 1`. `{ "status": "not_ready" }` with **503** when it does not. |
 | POST | `/requests` | Create. Always `SUBMITTED`. Body: `{ "submittedBy": 2, "departmentId": 1, "requestTypeId": 1 }` plus optional `title` and `description`. `submittedBy` must match the signed-in account. `requestTypeId` must belong to that department in the caller’s company. The live type policy is stored as `capturedApprovalPolicy`. `NONE` stores approval state `NOT_REQUIRED`. `DEPARTMENT_ADMIN` and `SUPER_ADMIN` store `PENDING`. The client cannot supply the snapshot or the state. |
 | GET | `/requests/approvals` | Inbox for the caller. A row is included when approval is `PENDING` or the state is still null and the captured policy requires a decision. Department Admin sees captured `DEPARTMENT_ADMIN` requests in their department that they did not submit. Super Admin sees captured `SUPER_ADMIN` requests in their company that they did not submit. Other roles are **403**. |
