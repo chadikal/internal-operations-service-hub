@@ -1,5 +1,6 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { Resend } from 'resend';
+import { currentRequestId } from '../logging/request-context';
 import { EMAIL_NOT_CONFIGURED, type OutboundEmail, type OutboundPurpose } from './email-sender';
 
 export const EMAIL_DELIVERY_FAILED = 'Email could not be sent. Try again later.';
@@ -55,7 +56,7 @@ export class ResendEmailProvider {
 
   private fail(purpose: OutboundPurpose, error: unknown, apiKey: string): never {
     console.error(
-      `Email delivery failed purpose=${purpose} provider=resend ${safeProviderDetail(error, apiKey)}`,
+      `Resend email send failed purpose=${purpose} provider=resend requestId=${currentRequestId()} ${safeProviderDetail(error, apiKey)}`,
     );
     throw new ServiceUnavailableException(EMAIL_DELIVERY_FAILED);
   }

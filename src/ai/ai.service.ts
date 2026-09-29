@@ -6,6 +6,7 @@ import {
   Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { currentRequestId } from '../logging/request-context';
 import { PrismaService } from '../prisma/prisma.service';
 import { AI_PROVIDER, AiProvider } from './ai-provider';
 import { IntakeResult, validateIntakeResult } from './intake.schema';
@@ -44,12 +45,14 @@ export class AiService {
       });
     } catch (error) {
       if (error instanceof InvalidAiOutputError) {
-        this.logger.error(`Requesty intake invalid output: ${error.message}`);
+        this.logger.error(
+          `Requesty intake invalid output: ${error.message} requestId=${currentRequestId()}`,
+        );
         throw new BadGatewayException('The intake assistant returned an invalid result.');
       }
       const detail = error instanceof Error ? error.message : 'Requesty request failed';
       this.logger.error(
-        `Requesty intake upstream failure: ${detail}`,
+        `Requesty intake upstream failure: ${detail} requestId=${currentRequestId()}`,
         error instanceof Error ? error.stack : undefined,
       );
       throw new ServiceUnavailableException(
@@ -62,7 +65,7 @@ export class AiService {
     } catch (error) {
       if (error instanceof InvalidAiOutputError) {
         this.logger.error(
-          `Requesty intake invalid output: ${error.message}; ${summarizePayload(raw)}`,
+          `Requesty intake invalid output: ${error.message}; ${summarizePayload(raw)} requestId=${currentRequestId()}`,
         );
         throw new BadGatewayException('The intake assistant returned an invalid result.');
       }

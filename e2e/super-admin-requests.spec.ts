@@ -357,6 +357,7 @@ test.describe('Super Admin requests', () => {
     await page.getByTestId('form-overlay').getByRole('button', { name: 'Approve' }).click();
     await expect(page.getByRole('combobox', { name: 'Approval Status' })).toHaveValue('all');
     await expect(approvalTable).toContainText(approvedTitle);
+    await page.getByTestId('close-form').click();
     await page.getByRole('combobox', { name: 'Approval Status' }).selectOption('awaiting');
     await expect(approvalTable).not.toContainText(approvedTitle);
     await page.getByRole('combobox', { name: 'Approval Status' }).selectOption('approved');

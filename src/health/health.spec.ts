@@ -1,4 +1,4 @@
-import { INestApplication } from '@nestjs/common';
+import { INestApplication, Logger } from '@nestjs/common';
 import * as request from 'supertest';
 import { PrismaService } from '../prisma/prisma.service';
 import { closeTestApp, createTestApp } from '../requests/test-helpers';
@@ -45,13 +45,25 @@ describe('health', () => {
     const query = jest.spyOn(prisma, '$queryRaw').mockRejectedValueOnce(
       new Error('connect ECONNREFUSED secret-host.neon.tech user=neondb password=super-secret'),
     );
+    const logs: string[] = [];
+    const errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation((message: unknown) => {
+      logs.push(String(message));
+    });
 
-    const response = await request(app.getHttpServer()).get('/health/ready');
+    const response = await request(app.getHttpServer())
+      .get('/health/ready')
+      .set('X-Request-Id', 'ready-check-1');
 
     expect(response.status).toBe(503);
     expect(response.body).toEqual({ status: 'not_ready' });
+    expect(response.headers['x-request-id']).toBe('ready-check-1');
     const serialized = JSON.stringify(response.body);
     expect(serialized).not.toMatch(/neon|password|ECONNREFUSED|secret-host|neondb|super-secret/i);
+    const printed = logs.join('\n');
+    expect(printed).toContain('Database readiness check failed');
+    expect(printed).toContain('ready-check-1');
+    expect(printed).not.toMatch(/neon|password|ECONNREFUSED|secret-host|neondb|super-secret/i);
     query.mockRestore();
+    errorSpy.mockRestore();
   });
 });

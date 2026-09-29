@@ -5,6 +5,7 @@ import { AppModule } from './app.module';
 import { assertJwtSecret } from './auth/jwt-secret';
 import { allowedOrigins } from './auth/origin';
 import { assertRuntimeConfig } from './config/runtime-config';
+import { startupLogLine } from './logging/startup-log';
 
 async function bootstrap() {
   try {
@@ -22,7 +23,8 @@ async function bootstrap() {
   app.enableCors({
     origin: allowedOrigins(),
     credentials: true,
-    allowedHeaders: ['Content-Type', 'X-CSRF-Token'],
+    allowedHeaders: ['Content-Type', 'X-CSRF-Token', 'X-Request-Id'],
+    exposedHeaders: ['X-Request-Id'],
   });
   app.useGlobalPipes(
     new ValidationPipe({
@@ -35,7 +37,7 @@ async function bootstrap() {
   app.enableShutdownHooks();
   const port = Number(process.env.PORT) || 3000;
   await app.listen(port, '0.0.0.0');
-  console.log(`Listening on http://0.0.0.0:${port}`);
+  console.log(startupLogLine(process.env.NODE_ENV, port, process.env.TRUST_PROXY === 'true'));
 }
 
 void bootstrap();

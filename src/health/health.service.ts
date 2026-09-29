@@ -1,4 +1,5 @@
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { currentRequestId } from '../logging/request-context';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -16,7 +17,7 @@ export class HealthService {
       await this.prisma.$queryRaw`SELECT 1`;
       return { status: 'ready' };
     } catch {
-      this.logger.error('Database readiness check failed');
+      this.logger.error(`Database readiness check failed requestId=${currentRequestId()}`);
       throw new HttpException({ status: 'not_ready' }, HttpStatus.SERVICE_UNAVAILABLE);
     }
   }
